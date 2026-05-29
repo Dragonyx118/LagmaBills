@@ -1,0 +1,22 @@
+mqtt: 
+controlli ruote,
+controllo servo robotArm come da codice,
+controllo sensore MPU6050 (giroscopio e accelerometro)
+controllo x6 sensori ultrasuoni + mappatura + GPS come da codici
+
+attivazione modalità perlustrazione autonoma,
+attivazione modalità insegui linea,
+
+controllo drone esp32 + attivazione atterraggio automatico,
+
+controllo emozioni manuali (attivazione manuale)
+controllo attivazione filmati manualmente/musica/audio
+
+(solo su raspeberry no sull'app): 
+	-> ricevizione dall'AI dell'audio di risposta / testo di risposta
+	-> invio dell'audio raw dopo la rilevazione della wakeword 
+
+MJPEG/http: 
+controllo telecamera OV rasp cam
+
+
