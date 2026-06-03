@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "palle")(type "KiCad")(uri "C:/Users/gianb/Desktop/ESP32-DEVKITC-32U.kicad_sym")(options "")(descr ""))
+)

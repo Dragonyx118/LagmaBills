@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<title>ESP-Drone Controller</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
+
+  :root {
+    --bg:        #0a0d10;
+    --panel:     #111620;
+    --border:    #1e2d40;
+    --accent:    #00e5ff;
+    --accent2:   #ff3d6b;
+    --warn:      #ffb300;
+    --ok:        #00e676;
+    --text:      #c8d8e8;
+    --dim:       #4a6070;
+    --thrust-h:  220px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px;
+    gap: 20px;
+  }
+
+  /* scanline overlay */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,229,255,.015) 2px,
+      rgba(0,229,255,.015) 4px
+    );
+    pointer-events: none;
+    z-index: 999;
+  }
+
+  h1 {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 900;
+    font-size: 1.5rem;
+    letter-spacing: .25em;
+    color: var(--accent);
+    text-shadow: 0 0 20px rgba(0,229,255,.5);
+  }
+
+  /* ── STATUS BAR ── */
+  #status-bar {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 20px;
+    width: 100%;
+    max-width: 760px;
+  }
+
+  .dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--dim);
+    transition: background .3s, box-shadow .3s;
+  }
+  .dot.on  { background: var(--ok);    box-shadow: 0 0 8px var(--ok); }
+  .dot.err { background: var(--accent2); box-shadow: 0 0 8px var(--accent2); }
+
+  #status-text { flex: 1; font-size: .8rem; color: var(--dim); }
+  #landing-badge {
+    display: none;
+    background: var(--accent2);
+    color: #fff;
+    font-family: 'Orbitron', sans-serif;
+    font-size: .65rem;
+    padding: 3px 10px;
+    border-radius: 4px;
+    animation: blink 1s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ── CONNECT PANEL ── */
+  #connect-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    width: 100%; max-width: 760px;
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;
+  }
+
+  .field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 140px; }
+  .field label { font-size: .7rem; color: var(--dim); text-transform: uppercase; letter-spacing: .1em; }
+  .field input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: .9rem;
+    padding: 8px 10px;
+    border-radius: 6px;
+    outline: none;
+    transition: border-color .2s;
+  }
+  .field input:focus { border-color: var(--accent); }
+
+  button {
+    font-family: 'Orbitron', sans-serif;
+    font-size: .75rem;
+    letter-spacing: .1em;
+    padding: 9px 20px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: opacity .2s, transform .1s;
+  }
+  button:active { transform: scale(.97); }
+
+  #btn-connect    { background: var(--accent);  color: var(--bg); }
+  #btn-disconnect { background: var(--dim);     color: var(--bg); }
+
+  /* ── MAIN GRID ── */
+  #main-grid {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 16px;
+    width: 100%; max-width: 760px;
+    align-items: start;
+  }
+
+  /* ── JOYSTICK ── */
+  .stick-wrap {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .stick-label {
+    font-family: 'Orbitron', sans-serif;
+    font-size: .65rem;
+    color: var(--dim);
+    letter-spacing: .15em;
+  }
+
+  canvas.joystick {
+    border-radius: 50%;
+    background: radial-gradient(circle, #141e28 60%, #0d1520 100%);
+    border: 1px solid var(--border);
+    cursor: crosshair;
+    touch-action: none;
+  }
+
+  .stick-vals {
+    font-size: .75rem;
+    color: var(--dim);
+    text-align: center;
+    line-height: 1.6;
+  }
+  .stick-vals span { color: var(--accent); }
+
+  /* ── THRUST SLIDER (centro) ── */
+  #thrust-wrap {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  #thrust-label {
+    font-family: 'Orbitron', sans-serif;
+    font-size: .65rem;
+    color: var(--dim);
+    letter-spacing: .15em;
+  }
+
+  #thrust-track {
+    width: 36px;
+    height: var(--thrust-h);
+    background: #0d1520;
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    position: relative;
+    cursor: ns-resize;
+    touch-action: none;
+  }
+
+  #thrust-fill {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    border-radius: 18px;
+    background: linear-gradient(to top, var(--accent2), var(--warn), var(--ok));
+    transition: height .05s;
+  }
+
+  #thrust-knob {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 12px rgba(0,229,255,.6);
+    transition: bottom .05s;
+  }
+
+  #thrust-val {
+    font-family: 'Orbitron', sans-serif;
+    font-size: .85rem;
+    color: var(--accent);
+  }
+
+  /* ── TELEMETRY BOX ── */
+  #telem {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    width: 100%; max-width: 760px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+
+  .telem-cell {
+    display: flex; flex-direction: column; gap: 2px;
+    border-left: 2px solid var(--border);
+    padding-left: 10px;
+  }
+  .telem-cell .t-label { font-size: .65rem; color: var(--dim); text-transform: uppercase; }
+  .telem-cell .t-val   { font-family: 'Orbitron', sans-serif; font-size: 1rem; color: var(--accent); }
+
+  /* ── STOP BUTTON ── */
+  #btn-stop {
+    background: var(--accent2);
+    color: #fff;
+    font-size: .9rem;
+    padding: 14px 0;
+    width: 100%; max-width: 760px;
+    border-radius: 10px;
+    letter-spacing: .2em;
+    box-shadow: 0 0 20px rgba(255,61,107,.3);
+  }
+  #btn-stop:hover { box-shadow: 0 0 30px rgba(255,61,107,.6); }
+
+  /* ── LOG ── */
+  #log {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    width: 100%; max-width: 760px;
+    height: 110px;
+    overflow-y: auto;
+    font-size: .72rem;
+    color: var(--dim);
+    line-height: 1.6;
+  }
+  #log .ok  { color: var(--ok); }
+  #log .err { color: var(--accent2); }
+  #log .warn{ color: var(--warn); }
+</style>
+</head>
+<body>
+
+<h1>ESP-DRONE CTRL</h1>
+
+<!-- Status -->
+<div id="status-bar">
+  <div class="dot" id="dot-mqtt"></div>
+  <span id="status-text">Non connesso</span>
+  <div id="landing-badge">⚠ AUTO-LANDING</div>
+</div>
+
+<!-- Connect panel -->
+<div id="connect-panel">
+  <div class="field">
+    <label>Broker IP (Pi)</label>
+    <input id="broker-ip" value="192.168.1.100" />
+  </div>
+  <div class="field" style="max-width:90px">
+    <label>WS Port</label>
+    <input id="broker-port" value="9001" />
+  </div>
+  <button id="btn-connect">CONNETTI</button>
+  <button id="btn-disconnect">DISCONNETTI</button>
+</div>
+
+<!-- Joystick + Thrust -->
+<div id="main-grid">
+  <!-- Joystick SX: Roll / Pitch -->
+  <div class="stick-wrap">
+    <div class="stick-label">ROLL · PITCH</div>
+    <canvas class="joystick" id="js-left" width="180" height="180"></canvas>
+    <div class="stick-vals">
+      Roll: <span id="val-roll">0.0</span>°<br>
+      Pitch: <span id="val-pitch">0.0</span>°
+    </div>
+  </div>
+
+  <!-- Thrust slider centrale -->
+  <div id="thrust-wrap">
+    <div id="thrust-label">THRUST</div>
+    <div id="thrust-track">
+      <div id="thrust-fill"></div>
+      <div id="thrust-knob"></div>
+    </div>
+    <div id="thrust-val">0</div>
+  </div>
+
+  <!-- Joystick DX: Yaw -->
+  <div class="stick-wrap">
+    <div class="stick-label">YAW</div>
+    <canvas class="joystick" id="js-right" width="180" height="180"></canvas>
+    <div class="stick-vals">
+      Yaw: <span id="val-yaw">0.0</span>°<br>
+      &nbsp;
+    </div>
+  </div>
+</div>
+
+<!-- Telemetry -->
+<div id="telem">
+  <div class="telem-cell"><div class="t-label">Roll TX</div><div class="t-val" id="t-roll">0.0</div></div>
+  <div class="telem-cell"><div class="t-label">Pitch TX</div><div class="t-val" id="t-pitch">0.0</div></div>
+  <div class="telem-cell"><div class="t-label">Yaw TX</div><div class="t-val" id="t-yaw">0.0</div></div>
+  <div class="telem-cell"><div class="t-label">Thrust TX</div><div class="t-val" id="t-thrust">0</div></div>
+</div>
+
+<!-- Stop -->
+<button id="btn-stop">■ STOP MOTORI</button>
+
+<!-- Log -->
+<div id="log"></div>
+
+<script>
+// ─────────────────────────────────────────
+// CONFIG TOPIC (devono combaciare con drone_controller.py)
+// ─────────────────────────────────────────
+const TOPIC_CMD    = 'drone/cmd/rpyt';
+const TOPIC_STOP   = 'drone/cmd/stop';
+const TOPIC_STATUS = 'drone/status/connected';
+const TOPIC_STATE  = 'drone/status/state';
+
+const MAX_THRUST   = 60000;
+const MAX_ANGLE    = 30;       // gradi max joystick
+const SEND_HZ      = 20;       // frequenza invio comandi (ms)
+
+// ─────────────────────────────────────────
+// Stato
+// ─────────────────────────────────────────
+let roll = 0, pitch = 0, yaw = 0, thrust = 0;
+let mqttClient = null;
+let sendInterval = null;
+
+// ─────────────────────────────────────────
+// Log
+// ─────────────────────────────────────────
+function log(msg, cls='') {
+  const el = document.getElementById('log');
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+// ─────────────────────────────────────────
+// MQTT
+// ─────────────────────────────────────────
+function connect() {
+  const ip   = document.getElementById('broker-ip').value.trim();
+  const port = parseInt(document.getElementById('broker-port').value.trim());
+  const cid  = 'drone-ui-' + Math.random().toString(16).slice(2,8);
+
+  mqttClient = new Paho.Client(ip, port, cid);
+
+  mqttClient.onConnectionLost = (r) => {
+    setDot('err');
+    document.getElementById('status-text').textContent = 'Connessione persa: ' + r.errorMessage;
+    log('Connessione MQTT persa: ' + r.errorMessage, 'err');
+    stopSending();
+  };
+
+  mqttClient.onMessageArrived = (msg) => {
+    if (msg.destinationName === TOPIC_STATUS) {
+      const online = msg.payloadString === 'true';
+      setDot(online ? 'on' : 'err');
+      document.getElementById('status-text').textContent =
+        online ? `Pi connesso — broker ${ip}:${port}` : 'Pi offline';
+    }
+    if (msg.destinationName === TOPIC_STATE) {
+      try {
+        const d = JSON.parse(msg.payloadString);
+        document.getElementById('t-roll').textContent   = (+d.roll).toFixed(1);
+        document.getElementById('t-pitch').textContent  = (+d.pitch).toFixed(1);
+        document.getElementById('t-yaw').textContent    = (+d.yaw).toFixed(1);
+        document.getElementById('t-thrust').textContent = d.thrust;
+        const badge = document.getElementById('landing-badge');
+        badge.style.display = d.landing ? 'block' : 'none';
+      } catch(e) {}
+    }
+  };
+
+  mqttClient.connect({
+    onSuccess: () => {
+      setDot('on');
+      document.getElementById('status-text').textContent = `Connesso — broker ${ip}:${port}`;
+      log(`Connesso a ${ip}:${port}`, 'ok');
+      mqttClient.subscribe(TOPIC_STATUS);
+      mqttClient.subscribe(TOPIC_STATE);
+      startSending();
+    },
+    onFailure: (e) => {
+      setDot('err');
+      document.getElementById('status-text').textContent = 'Errore: ' + e.errorMessage;
+      log('Errore connessione: ' + e.errorMessage, 'err');
+    },
+    useSSL: false
+  });
+}
+
+function disconnect() {
+  if (mqttClient && mqttClient.isConnected()) {
+    mqttClient.disconnect();
+    log('Disconnesso.', 'warn');
+  }
+  setDot('');
+  document.getElementById('status-text').textContent = 'Non connesso';
+  stopSending();
+}
+
+function setDot(state) {
+  const d = document.getElementById('dot-mqtt');
+  d.className = 'dot' + (state ? ' ' + state : '');
+}
+
+// ─────────────────────────────────────────
+// Invio comandi
+// ─────────────────────────────────────────
+function sendCmd() {
+  if (!mqttClient || !mqttClient.isConnected()) return;
+  const payload = JSON.stringify({ roll, pitch, yaw, thrust });
+  const msg = new Paho.Message(payload);
+  msg.destinationName = TOPIC_CMD;
+  mqttClient.send(msg);
+}
+
+function sendStop() {
+  if (!mqttClient || !mqttClient.isConnected()) return;
+  roll = pitch = yaw = thrust = 0;
+  updateUI();
+  const msg = new Paho.Message('stop');
+  msg.destinationName = TOPIC_STOP;
+  mqttClient.send(msg);
+  log('STOP inviato', 'warn');
+}
+
+function startSending() {
+  stopSending();
+  sendInterval = setInterval(sendCmd, 1000 / SEND_HZ);
+  log(`Streaming comandi a ${SEND_HZ}Hz`, 'ok');
+}
+
+function stopSending() {
+  if (sendInterval) { clearInterval(sendInterval); sendInterval = null; }
+}
+
+// ─────────────────────────────────────────
+// Aggiorna valori visivi
+// ─────────────────────────────────────────
+function updateUI() {
+  document.getElementById('val-roll').textContent  = roll.toFixed(1);
+  document.getElementById('val-pitch').textContent = pitch.toFixed(1);
+  document.getElementById('val-yaw').textContent   = yaw.toFixed(1);
+  updateThrust();
+}
+
+// ─────────────────────────────────────────
+// JOYSTICK
+// ─────────────────────────────────────────
+function makeJoystick(canvasId, onMove) {
+  const c   = document.getElementById(canvasId);
+  const ctx = c.getContext('2d');
+  const R   = c.width / 2;
+  const Kr  = 28;  // raggio knob
+  let active = false;
+  let kx = R, ky = R;
+
+  function draw() {
+    ctx.clearRect(0, 0, c.width, c.height);
+
+    // cerchio esterno
+    ctx.beginPath();
+    ctx.arc(R, R, R - 2, 0, Math.PI * 2);
+    ctx.strokeStyle = '#1e2d40';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // crosshair
+    ctx.strokeStyle = '#1e2d40';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(R, 4);  ctx.lineTo(R, c.height - 4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(4, R);  ctx.lineTo(c.width - 4, R);  ctx.stroke();
+
+    // linea centro → knob
+    ctx.beginPath();
+    ctx.moveTo(R, R);
+    ctx.lineTo(kx, ky);
+    ctx.strokeStyle = 'rgba(0,229,255,.3)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // knob
+    const grad = ctx.createRadialGradient(kx, ky, 2, kx, ky, Kr);
+    grad.addColorStop(0, '#00e5ff');
+    grad.addColorStop(1, '#0070a0');
+    ctx.beginPath();
+    ctx.arc(kx, ky, Kr, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,229,255,.8)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  function norm(ex, ey) {
+    const rect = c.getBoundingClientRect();
+    let x = ex - rect.left - R;
+    let y = ey - rect.top  - R;
+    const dist = Math.sqrt(x*x + y*y);
+    const maxR = R - Kr - 4;
+    if (dist > maxR) { x = x/dist*maxR; y = y/dist*maxR; }
+    kx = R + x; ky = R + y;
+    const nx =  x / maxR;   // -1..1
+    const ny = -y / maxR;   // -1..1 (y invertita)
+    onMove(nx, ny);
+    draw();
+  }
+
+  function release() {
+    active = false;
+    kx = R; ky = R;
+    onMove(0, 0);
+    draw();
+  }
+
+  c.addEventListener('mousedown',  e => { active = true; norm(e.clientX, e.clientY); });
+  c.addEventListener('mousemove',  e => { if (active) norm(e.clientX, e.clientY); });
+  c.addEventListener('mouseup',    release);
+  c.addEventListener('mouseleave', release);
+
+  c.addEventListener('touchstart', e => { e.preventDefault(); active = true; norm(e.touches[0].clientX, e.touches[0].clientY); }, {passive:false});
+  c.addEventListener('touchmove',  e => { e.preventDefault(); if(active) norm(e.touches[0].clientX, e.touches[0].clientY); }, {passive:false});
+  c.addEventListener('touchend',   release);
+
+  draw();
+}
+
+// Joystick sinistro → Roll (X) e Pitch (Y)
+makeJoystick('js-left', (nx, ny) => {
+  roll  = +(nx * MAX_ANGLE).toFixed(1);
+  pitch = +(ny * MAX_ANGLE).toFixed(1);
+  document.getElementById('val-roll').textContent  = roll.toFixed(1);
+  document.getElementById('val-pitch').textContent = pitch.toFixed(1);
+});
+
+// Joystick destro → Yaw (X solo)
+makeJoystick('js-right', (nx, ny) => {
+  yaw = +(nx * MAX_ANGLE).toFixed(1);
+  document.getElementById('val-yaw').textContent = yaw.toFixed(1);
+});
+
+// ─────────────────────────────────────────
+// THRUST SLIDER
+// ─────────────────────────────────────────
+const track = document.getElementById('thrust-track');
+const fill  = document.getElementById('thrust-fill');
+const knob  = document.getElementById('thrust-knob');
+let thrustActive = false;
+
+function thrustFromY(clientY) {
+  const rect = track.getBoundingClientRect();
+  const h    = rect.height;
+  const y    = Math.max(0, Math.min(h, clientY - rect.top));
+  const frac = 1 - y / h;   // 0 = bottom, 1 = top
+  thrust = Math.round(frac * MAX_THRUST);
+  updateThrust();
+}
+
+function updateThrust() {
+  const pct = thrust / MAX_THRUST;
+  const h   = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--thrust-h'));
+  fill.style.height  = (pct * 100) + '%';
+  knob.style.bottom  = (pct * (h - 28)) + 'px';
+  document.getElementById('thrust-val').textContent = thrust;
+}
+
+track.addEventListener('mousedown',  e => { thrustActive = true; thrustFromY(e.clientY); });
+document.addEventListener('mousemove', e => { if (thrustActive) thrustFromY(e.clientY); });
+document.addEventListener('mouseup',   () => { thrustActive = false; });
+track.addEventListener('touchstart', e => { e.preventDefault(); thrustActive = true; thrustFromY(e.touches[0].clientY); }, {passive:false});
+document.addEventListener('touchmove', e => { if (thrustActive) thrustFromY(e.touches[0].clientY); }, {passive:false});
+document.addEventListener('touchend',  () => { thrustActive = false; });
+
+// ─────────────────────────────────────────
+// Bottoni
+// ─────────────────────────────────────────
+document.getElementById('btn-connect').addEventListener('click', connect);
+document.getElementById('btn-disconnect').addEventListener('click', disconnect);
+document.getElementById('btn-stop').addEventListener('click', sendStop);
+
+// init
+updateThrust();
+log('Controller pronto. Inserisci IP del Raspberry Pi e connettiti.');
+</script>
+</body>
+</html>
