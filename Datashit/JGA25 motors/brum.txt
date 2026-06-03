@@ -1,0 +1,39 @@
+MOTORE #1 (Ant-SX):
+  Power:
+    🔴 Rosso  → Driver #1 A01
+    ⚫ Nero   → Driver #1 A02
+  Encoder:
+    🟡 VCC   → 5V
+    ⚪ GND   → GND
+    🟢 Ch A  → ESP32 GPIO 34
+    🔵 Ch B  → ESP32 GPIO 35
+
+MOTORE #2 (Ant-DX):
+  Power:
+    🔴 Rosso  → Driver #1 B01
+    ⚫ Nero   → Driver #1 B02
+  Encoder:
+    🟡 VCC   → 5V
+    ⚪ GND   → GND
+    🟢 Ch A  → ESP32 GPIO 36
+    🔵 Ch B  → ESP32 GPIO 39
+
+MOTORE #3 (Post-SX):
+  Power:
+    🔴 Rosso  → Driver #2 A01
+    ⚫ Nero   → Driver #2 A02
+  Encoder:
+    🟡 VCC   → 5V
+    ⚪ GND   → GND
+    🟢 Ch A  → ESP32 GPIO 18
+    🔵 Ch B  → ESP32 GPIO 19
+
+MOTORE #4 (Post-DX):
+  Power:
+    🔴 Rosso  → Driver #2 B01
+    ⚫ Nero   → Driver #2 B02
+  Encoder:
+    🟡 VCC   → 5V
+    ⚪ GND   → GND
+    🟢 Ch A  → ESP32 GPIO 21
+    🔵 Ch B  → ESP32 GPIO 22
