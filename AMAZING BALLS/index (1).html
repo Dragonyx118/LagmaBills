@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Robot Arm Control</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #1a1d26;
+    --panel2: #22263a;
+    --accent: #5b8dee;
+    --accent2: #38d9a9;
+    --danger: #ff6b6b;
+    --warn: #ffd43b;
+    --text: #e8eaf6;
+    --muted: #6c7294;
+    --border: #2e3251;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height: 100vh;
+    padding: 16px;
+  }
+
+  /* ── Layout ── */
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 20px; background: var(--panel);
+    border-radius: var(--radius); margin-bottom: 16px;
+    border: 1px solid var(--border);
+  }
+  header h1 { font-size: 1.25rem; font-weight: 700; }
+  header .pill {
+    margin-left: auto; display: flex; align-items: center; gap: 6px;
+    font-size: .8rem; padding: 4px 12px; border-radius: 99px;
+    background: #1e2b1e; color: var(--accent2); border: 1px solid #2a5a3a;
+  }
+  header .pill.err { background: #2b1e1e; color: var(--danger); border-color: #5a2a2a; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+         animation: pulse 1.4s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    gap: 16px;
+    align-items: start;
+  }
+  @media(max-width:900px){ .grid { grid-template-columns: 1fr; } }
+
+  /* ── Panel ── */
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 18px;
+  }
+  .panel h2 {
+    font-size: .85rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--muted); margin-bottom: 16px;
+  }
+
+  /* ── Servo sliders ── */
+  .servo-row {
+    display: grid; grid-template-columns: 90px 1fr 52px 44px;
+    align-items: center; gap: 10px; margin-bottom: 14px;
+  }
+  .servo-label { font-size: .85rem; color: var(--muted); }
+  input[type=range] {
+    -webkit-appearance: none; width: 100%; height: 6px;
+    background: var(--panel2); border-radius: 4px; outline: none; cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent); border: 2px solid #fff; cursor: pointer;
+    transition: transform .1s;
+  }
+  input[type=range]:active::-webkit-slider-thumb { transform: scale(1.25); }
+  .angle-val {
+    font-size: .9rem; font-weight: 700; font-variant-numeric: tabular-nums;
+    text-align: right; color: var(--accent);
+  }
+
+  /* ── Buttons ── */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 9px 16px; border-radius: 8px; border: none; cursor: pointer;
+    font-size: .85rem; font-weight: 600; transition: all .15s; text-decoration: none;
+    white-space: nowrap;
+  }
+  .btn-primary  { background: var(--accent); color: #fff; }
+  .btn-primary:hover  { background: #7aaeff; }
+  .btn-success  { background: var(--accent2); color: #0e2e26; }
+  .btn-success:hover  { background: #52efc0; }
+  .btn-danger   { background: var(--danger); color: #fff; }
+  .btn-danger:hover   { background: #ff9090; }
+  .btn-warn     { background: var(--warn); color: #2d2000; }
+  .btn-warn:hover     { background: #ffe066; }
+  .btn-ghost    { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+  .btn-ghost:hover    { background: var(--border); }
+  .btn-sm { padding: 6px 10px; font-size: .78rem; }
+  .btn:disabled { opacity: .4; pointer-events: none; }
+
+  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+
+  /* ── Speed ── */
+  .speed-row {
+    display: flex; align-items: center; gap: 12px; margin-top: 8px; padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .speed-row label { font-size: .8rem; color: var(--muted); white-space: nowrap; }
+
+  /* ── Presets grid ── */
+  .presets-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .preset-btn {
+    padding: 10px 8px; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: .82rem; font-weight: 600;
+    cursor: pointer; transition: all .15s; text-align: center;
+  }
+  .preset-btn:hover { background: var(--accent); border-color: var(--accent); }
+
+  /* ── Pick & Place ── */
+  .pick-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+  }
+  .pick-row label { font-size: .82rem; color: var(--muted); white-space: nowrap; }
+  input[type=number] {
+    width: 70px; padding: 7px 10px; border-radius: 6px;
+    background: var(--panel2); border: 1px solid var(--border);
+    color: var(--text); font-size: .85rem; outline: none;
+  }
+  input[type=number]:focus { border-color: var(--accent); }
+
+  /* ── Sequenza ── */
+  .seq-list {
+    max-height: 160px; overflow-y: auto;
+    background: var(--panel2); border-radius: 8px; border: 1px solid var(--border);
+    padding: 8px; margin-bottom: 10px; font-size: .78rem; font-family: monospace;
+    color: var(--muted);
+  }
+  .seq-step { padding: 3px 0; border-bottom: 1px solid var(--border); }
+  .seq-step:last-child { border: none; }
+
+  /* ── Log ── */
+  .log {
+    max-height: 120px; overflow-y: auto;
+    background: #0a0c12; border-radius: 8px; padding: 10px;
+    font-size: .75rem; font-family: monospace; color: var(--muted);
+    border: 1px solid var(--border);
+  }
+  .log-ok  { color: var(--accent2); }
+  .log-err { color: var(--danger); }
+  .log-info{ color: var(--accent); }
+
+  /* ── 3D Arm visualization ── */
+  .arm-viz {
+    width: 100%; aspect-ratio: 1; position: relative;
+    background: var(--panel2); border-radius: 10px; overflow: hidden;
+    border: 1px solid var(--border); margin-bottom: 16px;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  /* ── Toast ── */
+  #toast {
+    position: fixed; bottom: 20px; right: 20px; z-index: 9999;
+    padding: 10px 18px; border-radius: 8px; font-size: .85rem; font-weight: 600;
+    transform: translateY(80px); opacity: 0; transition: all .3s;
+    background: var(--accent2); color: #0e2e26;
+  }
+  #toast.show { transform: translateY(0); opacity: 1; }
+  #toast.err  { background: var(--danger); color: #fff; }
+</style>
+</head>
+<body>
+
+<header>
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#5b8dee" stroke-width="2">
+    <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+  </svg>
+  <h1>Robot Arm Control</h1>
+  <span id="conn-pill" class="pill err"><span class="dot"></span>Disconnesso</span>
+</header>
+
+<div class="grid">
+
+  <!-- ── Colonna sinistra ── -->
+  <div>
+
+    <!-- Servo Sliders -->
+    <div class="panel" style="margin-bottom:16px">
+      <h2>Controllo Servo</h2>
+
+      <div id="servos-container">
+        <!-- generato da JS -->
+      </div>
+
+      <div class="speed-row">
+        <label>🐢 Velocità</label>
+        <input type="range" id="speed-slider" min="1" max="100" value="50"
+               oninput="document.getElementById('speed-val').textContent=this.value+'%';sendSpeed(this.value)">
+        <span id="speed-val" class="angle-val">50%</span>
+      </div>
+
+      <div class="btn-row" style="margin-top:14px">
+        <button class="btn btn-ghost" onclick="sendHome()">🏠 HOME</button>
+        <button class="btn btn-ghost" onclick="refreshStatus()">↻ Aggiorna</button>
+      </div>
+    </div>
+
+    <!-- Pick & Place -->
+    <div class="panel" style="margin-bottom:16px">
+      <h2>Pick &amp; Place automatico</h2>
+      <div class="pick-row">
+        <label>Angolo base pick</label>
+        <input type="number" id="pick-angle" value="90" min="0" max="180">
+        <button class="btn btn-success" onclick="doPick()">⬇ PICK</button>
+      </div>
+      <div class="pick-row">
+        <label>Angolo base place</label>
+        <input type="number" id="place-angle" value="0" min="0" max="180">
+        <button class="btn btn-warn" onclick="doPlace()">⬆ PLACE</button>
+      </div>
+    </div>
+
+    <!-- Sequenza -->
+    <div class="panel">
+      <h2>Sequenza Programmata</h2>
+      <div id="seq-list" class="seq-list"><span style="color:#444">Nessuno step salvato</span></div>
+      <div class="btn-row">
+        <button class="btn btn-primary btn-sm" onclick="saveStep()">💾 Salva Step</button>
+        <button class="btn btn-success btn-sm" onclick="runSequence()">▶ Esegui</button>
+        <button class="btn btn-danger btn-sm" onclick="resetSequence()">✕ Reset</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Colonna destra ── -->
+  <div>
+
+    <!-- Visualizzazione 3D semplificata -->
+    <div class="panel" style="margin-bottom:16px">
+      <h2>Vista braccio</h2>
+      <div class="arm-viz">
+        <canvas id="arm-canvas"></canvas>
+      </div>
+    </div>
+
+    <!-- Preset -->
+    <div class="panel" style="margin-bottom:16px">
+      <h2>Preset</h2>
+      <div class="presets-grid">
+        <button class="preset-btn" onclick="runPreset('home')">🏠 Home</button>
+        <button class="preset-btn" onclick="runPreset('pick_ready')">👇 Pick pronto</button>
+        <button class="preset-btn" onclick="runPreset('pick_open')">🖐 Pinza aperta</button>
+        <button class="preset-btn" onclick="runPreset('pick_close')">✊ Pinza chiusa</button>
+        <button class="preset-btn" onclick="runPreset('place_ready')">⬆ Place pronto</button>
+        <button class="preset-btn" onclick="runPreset('rest')">💤 Riposo</button>
+        <button class="preset-btn" onclick="runPreset('wave')">👋 Wave</button>
+        <button class="preset-btn" onclick="runPreset('place_drop')">📦 Rilascia</button>
+      </div>
+    </div>
+
+    <!-- Log -->
+    <div class="panel">
+      <h2>Log</h2>
+      <div id="log" class="log"></div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ──────────────────────────────────────────
+//  Config
+// ──────────────────────────────────────────
+const API = (window.location.hostname === 'localhost' || window.location.hostname === '')
+  ? 'http://localhost:5000'
+  : `http://${window.location.hostname}:5000`;
+
+const SERVO_NAMES  = ["Base","Spalla","Gomito","Polso Pitch","Polso Roll","Gripper"];
+const SERVO_LIMITS = [[0,180],[30,170],[0,150],[0,180],[0,180],[20,160]];
+const SERVO_HOME   = [90,150,35,140,85,80];
+const SERVO_ICONS  = ["🔄","💪","🦾","↕","↔","✋"];
+
+let angles   = [...SERVO_HOME];
+let sequence = [];
+let connected = false;
+
+// ──────────────────────────────────────────
+//  Genera slider servo
+// ──────────────────────────────────────────
+function buildSliders() {
+  const c = document.getElementById('servos-container');
+  c.innerHTML = '';
+  SERVO_NAMES.forEach((name, i) => {
+    const [lo, hi] = SERVO_LIMITS[i];
+    c.innerHTML += `
+      <div class="servo-row">
+        <span class="servo-label">${SERVO_ICONS[i]} ${name}</span>
+        <input type="range" id="s${i}" min="${lo}" max="${hi}" value="${angles[i]}"
+               oninput="onSlider(${i},this.value)">
+        <span class="angle-val" id="av${i}">${angles[i]}°</span>
+        <button class="btn btn-ghost btn-sm" onclick="sendServo(${i}, angles[${i}])">↗</button>
+      </div>`;
+  });
+}
+
+function onSlider(id, val) {
+  angles[id] = parseInt(val);
+  document.getElementById(`av${id}`).textContent = val + '°';
+  drawArm();
+}
+
+// ──────────────────────────────────────────
+//  API calls
+// ──────────────────────────────────────────
+async function api(method, path, body=null) {
+  try {
+    const opts = { method, headers: {'Content-Type':'application/json'} };
+    if (body) opts.body = JSON.stringify(body);
+    const r = await fetch(API + path, opts);
+    const j = await r.json();
+    if (j.status === 'ok') { log(j.message || path, 'ok'); return j; }
+    else { log(j.message || 'Errore', 'err'); return null; }
+  } catch(e) {
+    log('Connessione fallita: ' + e.message, 'err');
+    setConnected(false);
+    return null;
+  }
+}
+
+function sendServo(id, angle) {
+  api('POST', `/servo/${id}`, {angle});
+}
+
+function sendAllServos() {
+  api('POST', '/move_all', {angles});
+}
+
+function sendHome() {
+  api('POST', '/home').then(() => {
+    angles = [...SERVO_HOME];
+    updateSliders();
+    drawArm();
+  });
+}
+
+function sendSpeed(v) {
+  api('POST', '/speed', {speed: parseInt(v)});
+}
+
+function runPreset(name) {
+  api('POST', `/preset/${name}`).then(r => {
+    if (r) refreshStatus();
+  });
+}
+
+function doPick() {
+  const wa = parseInt(document.getElementById('pick-angle').value);
+  api('POST', '/pick', {waist_angle: wa}).then(() => refreshStatus());
+}
+
+function doPlace() {
+  const wa = parseInt(document.getElementById('place-angle').value);
+  api('POST', '/place', {waist_angle: wa}).then(() => refreshStatus());
+}
+
+function saveStep() {
+  api('POST', '/save_step').then(r => {
+    if (r) {
+      sequence.push([...angles]);
+      renderSequence();
+    }
+  });
+}
+
+function runSequence() {
+  api('POST', '/run_sequence');
+}
+
+function resetSequence() {
+  api('POST', '/reset_sequence').then(() => {
+    sequence = [];
+    renderSequence();
+  });
+}
+
+function renderSequence() {
+  const el = document.getElementById('seq-list');
+  if (sequence.length === 0) {
+    el.innerHTML = '<span style="color:#444">Nessuno step salvato</span>';
+    return;
+  }
+  el.innerHTML = sequence.map((s, i) =>
+    `<div class="seq-step">Step ${i+1}: ${SERVO_NAMES.map((n,j)=>`${n.slice(0,3)}=${s[j]}°`).join('  ')}</div>`
+  ).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+async function refreshStatus() {
+  const r = await api('GET', '/status');
+  if (!r) return;
+  setConnected(true);
+  r.data.servos.forEach((s,i) => {
+    angles[i] = s.angle;
+  });
+  updateSliders();
+  const steps = r.data.sequence_steps;
+  log(`Stato aggiornato — ${steps} step in memoria`, 'info');
+  drawArm();
+}
+
+function updateSliders() {
+  SERVO_NAMES.forEach((_,i) => {
+    const el = document.getElementById(`s${i}`);
+    if (el) { el.value = angles[i]; document.getElementById(`av${i}`).textContent = angles[i]+'°'; }
+  });
+}
+
+// ──────────────────────────────────────────
+//  Aggiorna slider in tempo reale → invia
+// ──────────────────────────────────────────
+let sendTimer = null;
+document.addEventListener('input', e => {
+  if (e.target.id && e.target.id.startsWith('s') && e.target.id.length === 2) {
+    clearTimeout(sendTimer);
+    sendTimer = setTimeout(() => {
+      const id = parseInt(e.target.id[1]);
+      sendServo(id, angles[id]);
+    }, 120);
+  }
+});
+
+// ──────────────────────────────────────────
+//  Log & Toast
+// ──────────────────────────────────────────
+function log(msg, type='info') {
+  const el = document.getElementById('log');
+  const t  = new Date().toLocaleTimeString();
+  el.innerHTML += `<div class="log-${type}">[${t}] ${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+let toastTimer;
+function toast(msg, err=false) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className   = 'show' + (err ? ' err' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.className = '', 2500);
+}
+
+function setConnected(c) {
+  connected = c;
+  const pill = document.getElementById('conn-pill');
+  if (c) { pill.className='pill'; pill.innerHTML='<span class="dot"></span>Connesso'; }
+  else   { pill.className='pill err'; pill.innerHTML='<span class="dot"></span>Disconnesso'; }
+}
+
+// ──────────────────────────────────────────
+//  Visualizzazione braccio (canvas 2D top-down + side)
+// ──────────────────────────────────────────
+function drawArm() {
+  const canvas = document.getElementById('arm-canvas');
+  const rect   = canvas.parentElement.getBoundingClientRect();
+  canvas.width  = rect.width;
+  canvas.height = rect.width;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  const W = canvas.width, H = canvas.height;
+  const cx = W/2, cy = H * 0.85;
+
+  // Lunghezze segmenti (proporzionali)
+  const L = [0, W*0.22, W*0.22, W*0.14, W*0.1];
+
+  // Angoli in radianti (vista laterale semplificata)
+  const base  = (angles[0] - 90) * Math.PI/180;  // rotazione base
+  const sh    = (angles[1] - 90) * Math.PI/180;  // spalla
+  const el    = (angles[2] - 90) * Math.PI/180;  // gomito
+  const wp    = (angles[3] - 90) * Math.PI/180;  // polso
+
+  ctx.lineCap  = 'round';
+  ctx.lineJoin = 'round';
+
+  // Disegna base
+  ctx.beginPath();
+  ctx.arc(cx, cy, 20, 0, Math.PI*2);
+  ctx.fillStyle = '#3a3f5c';
+  ctx.fill();
+
+  // Calcola punti articolazione
+  let x = cx, y = cy;
+  const colors = ['#5b8dee','#38d9a9','#ffd43b','#ff6b6b'];
+  const joints = [[x,y]];
+
+  // Vista dal lato (ignoriamo rotazione base per semplicità visiva)
+  const angles_chain = [sh, el, wp, 0];
+  let cumAngle = -Math.PI/2;
+
+  for (let i = 0; i < 4; i++) {
+    cumAngle += angles_chain[i];
+    const nx = x + Math.cos(cumAngle) * L[i+1];
+    const ny = y + Math.sin(cumAngle) * L[i+1];
+    joints.push([nx, ny]);
+
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(nx, ny);
+    ctx.strokeStyle = colors[i];
+    ctx.lineWidth   = 8 - i*1.5;
+    ctx.stroke();
+
+    // Cerchio articolazione
+    ctx.beginPath();
+    ctx.arc(nx, ny, 6 - i, 0, Math.PI*2);
+    ctx.fillStyle = colors[i];
+    ctx.fill();
+
+    x = nx; y = ny;
+  }
+
+  // Gripper
+  const gOpen = (angles[5] - 20) / 140; // 0=chiuso, 1=aperto
+  const gSize = 12 + gOpen * 14;
+  ctx.beginPath();
+  ctx.arc(x, y, gSize, 0, Math.PI*2);
+  ctx.strokeStyle = '#a78bfa';
+  ctx.lineWidth   = 3;
+  ctx.stroke();
+  ctx.fillStyle   = `rgba(167,139,250,${0.15 + gOpen*0.2})`;
+  ctx.fill();
+
+  // Labels
+  ctx.font      = '10px monospace';
+  ctx.fillStyle = '#6c7294';
+  ctx.fillText(`Base ${angles[0]}°`, 8, 14);
+  ctx.fillText(`Sp ${angles[1]}°  Go ${angles[2]}°`, 8, 26);
+  ctx.fillText(`Gr ${angles[5]}°`, 8, 38);
+}
+
+// ──────────────────────────────────────────
+//  Init
+// ──────────────────────────────────────────
+buildSliders();
+drawArm();
+window.addEventListener('resize', drawArm);
+
+// Polling stato ogni 3 secondi
+setInterval(refreshStatus, 3000);
+refreshStatus(); // primo aggiornamento
+</script>
+</body>
+</html>

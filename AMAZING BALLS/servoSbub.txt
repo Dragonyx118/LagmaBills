@@ -1,0 +1,29 @@
+ESP32          PCA9685
+GPIO 21  →  SDA
+GPIO 22  →  SCL
+3.3V     →  VCC
+GND      →  GND
+
+Alimentazione servo (esterna):
+6V dal tuo XL4015  →  V+  (terminale verde)
+GND                →  GND (terminale verde)
+
+--> controllare collegamento XL4015
+
+CH0 → MG996R (vita)
+CH1 → MG996R (spalla)
+CH2 → MG996R (gomito)
+CH3 → SG90   (polso roll)
+CH4 → SG90   (polso pitch)
+CH5 → SG90   (gripper)
+
+--> godo già giusti credo
+
+0x1A → ReSpeaker WM8960
+0x08 → ESP32 motori/braccio
+0x09 → ESP32 sensori (già definito)
+0x40 → PCA9685 servo
+
+--> raspeberry niente perchè master
+
+---> controllare con oscillometro pca.setOscillatorFrequency(27000000);
