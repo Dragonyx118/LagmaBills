@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Robot Face – Emotion Creator</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;600&display=swap');
+
+*{margin:0;padding:0;box-sizing:border-box;}
+
+:root {
+  --bg: #0d0f1a;
+  --panel: #141828;
+  --panel2: #1a1f35;
+  --border: rgba(255,255,255,0.08);
+  --accent: #4f8eff;
+  --accent2: #2dd4bf;
+  --text: #e8ecff;
+  --muted: rgba(232,236,255,0.4);
+  --face-bg: #1a56db;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  grid-template-rows: auto 1fr;
+  gap: 0;
+}
+
+/* ── Header ── */
+header {
+  grid-column: 1/-1;
+  padding: 18px 32px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--panel);
+}
+header h1 {
+  font-family: 'Space Mono', monospace;
+  font-size: 14px;
+  letter-spacing: 1px;
+  color: var(--accent2);
+  text-transform: uppercase;
+}
+header p { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.header-dot { width:8px;height:8px;border-radius:50%;background:var(--accent2);box-shadow:0 0 8px var(--accent2); }
+
+/* ── Preview ── */
+.preview-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 40px;
+  background: radial-gradient(ellipse at 50% 40%, #1a2a6c 0%, var(--bg) 70%);
+  position: relative;
+}
+
+.face-wrap {
+  background: var(--face-bg);
+  border-radius: 28px;
+  padding: 24px;
+  box-shadow: 0 0 60px rgba(26,86,219,0.5), 0 0 0 1px rgba(255,255,255,0.06);
+  position: relative;
+}
+
+canvas#face { display: block; }
+
+.emotion-label {
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--accent2);
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+/* Test buttons */
+.test-moods {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 480px;
+}
+.test-moods span {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: 'Space Mono', monospace;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  width: 100%;
+  text-align: center;
+  margin-bottom: 4px;
+}
+.mood-btn {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 6px 14px;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.04);
+  color: var(--muted);
+  border-radius: 99px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: uppercase;
+}
+.mood-btn:hover { border-color: var(--accent); color: var(--accent); }
+.mood-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.mood-btn.custom-active { background: var(--accent2); color: #0d0f1a; border-color: var(--accent2); }
+
+/* ── Control Panel ── */
+.panel {
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-section {
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.panel-section:last-child { border-bottom: none; flex: 1; }
+
+.section-title {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.slider-row label {
+  font-size: 11px;
+  color: var(--muted);
+  width: 120px;
+  flex-shrink: 0;
+}
+.slider-row input[type=range] {
+  flex: 1;
+  -webkit-appearance: none;
+  height: 3px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.slider-row input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--accent2);
+  cursor: pointer;
+  box-shadow: 0 0 6px var(--accent2);
+}
+.slider-row .val {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  color: var(--accent2);
+  width: 32px;
+  text-align: right;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.toggle-row label { font-size: 11px; color: var(--muted); flex: 1; }
+.toggle {
+  width: 36px; height: 20px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 10px;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+.toggle.on { background: var(--accent2); }
+.toggle::after {
+  content:'';
+  position: absolute;
+  width: 14px; height: 14px;
+  background: #fff;
+  border-radius: 50%;
+  top: 3px; left: 3px;
+  transition: left 0.2s;
+}
+.toggle.on::after { left: 19px; }
+
+.select-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.select-row label { font-size: 11px; color: var(--muted); width: 120px; flex-shrink:0; }
+.select-row select {
+  flex: 1;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  outline: none;
+  cursor: pointer;
+}
+.select-row select:focus { border-color: var(--accent); }
+
+/* Buttons */
+.btn-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.btn {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s;
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  flex: 1;
+}
+.btn-primary:hover { background: #6fa4ff; }
+.btn-secondary {
+  background: rgba(255,255,255,0.06);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn-secondary:hover { background: rgba(255,255,255,0.1); }
+
+/* Name input */
+.name-input {
+  width: 100%;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  font-family: 'DM Sans', sans-serif;
+  padding: 8px 12px;
+  border-radius: 6px;
+  outline: none;
+  margin-bottom: 12px;
+}
+.name-input:focus { border-color: var(--accent); }
+.name-input::placeholder { color: var(--muted); }
+
+/* Saved emotions */
+.saved-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.saved-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.saved-item:hover { border-color: var(--accent2); }
+.saved-item.active { border-color: var(--accent2); background: rgba(45,212,191,0.08); }
+.saved-item .saved-name {
+  font-size: 12px;
+  font-weight: 600;
+  flex: 1;
+}
+.saved-item .saved-delete {
+  font-size: 14px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.15s;
+}
+.saved-item .saved-delete:hover { color: #ff4d6d; }
+.empty-state {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  padding: 16px;
+  font-style: italic;
+}
+
+/* AI section */
+.ai-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.ai-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent2);
+  box-shadow: 0 0 6px var(--accent2);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+textarea.ai-prompt {
+  width: 100%;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11px;
+  font-family: 'DM Sans', sans-serif;
+  padding: 10px 12px;
+  border-radius: 6px;
+  outline: none;
+  resize: vertical;
+  min-height: 70px;
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+textarea.ai-prompt:focus { border-color: var(--accent); }
+textarea.ai-prompt::placeholder { color: var(--muted); }
+
+.ai-status {
+  font-size: 10px;
+  font-family: 'Space Mono', monospace;
+  color: var(--accent2);
+  min-height: 16px;
+  margin-top: 6px;
+}
+
+/* Color pickers */
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.color-row label { font-size: 11px; color: var(--muted); width: 120px; flex-shrink:0; }
+.color-row input[type=color] {
+  width: 36px; height: 26px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+/* Subtitle brow section */
+.subsection-title {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin: 14px 0 8px;
+  font-family: 'Space Mono', monospace;
+  opacity: 0.6;
+}
+
+/* Responsive */
+@media (max-width: 720px) {
+  body { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr; }
+  .panel { border-left: none; border-top: 1px solid var(--border); max-height: 55vh; }
+  .preview-area { padding: 24px 16px; }
+}
+
+.export-code {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  font-family: 'Space Mono', monospace;
+  font-size: 9px;
+  color: var(--accent2);
+  overflow-x: auto;
+  white-space: pre;
+  max-height: 120px;
+  overflow-y: auto;
+  display: none;
+  margin-top: 10px;
+}
+.export-code.show { display: block; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-dot"></div>
+  <div>
+    <h1>Robot Face — Emotion Creator</h1>
+    <p>Crea e salva nuove emozioni per la faccina robot</p>
+  </div>
+</header>
+
+<!-- Preview -->
+<div class="preview-area">
+  <div class="face-wrap">
+    <canvas id="face"></canvas>
+  </div>
+  <div class="emotion-label" id="currentLabel">NEUTRAL</div>
+  <div class="test-moods">
+    <span>Emozioni base</span>
+    <button class="mood-btn active" data-mood="neutral"     onclick="setMood('neutral')">Neutral</button>
+    <button class="mood-btn"       data-mood="happy"        onclick="setMood('happy')">Happy</button>
+    <button class="mood-btn"       data-mood="sad"          onclick="setMood('sad')">Sad</button>
+    <button class="mood-btn"       data-mood="angry"        onclick="setMood('angry')">Angry</button>
+    <button class="mood-btn"       data-mood="surprised"    onclick="setMood('surprised')">Surprised</button>
+    <button class="mood-btn"       data-mood="sleeping"     onclick="setMood('sleeping')">Sleeping</button>
+    <button class="mood-btn"       data-mood="afraid"       onclick="setMood('afraid')">Afraid</button>
+    <button class="mood-btn"       data-mood="skeptical"    onclick="setMood('skeptical')">Sceptical</button>
+    <button class="mood-btn"       data-mood="celebrating"  onclick="setMood('celebrating')">Celebrating</button>
+    <button class="mood-btn"       data-mood="disgusted"    onclick="setMood('disgusted')">Disgusted</button>
+    <button class="mood-btn"       data-mood="love"         onclick="setMood('love')">In love</button>
+    <button class="mood-btn"       data-mood="crying"       onclick="setMood('crying')">Crying</button>
+  </div>
+</div>
+
+<!-- Control Panel -->
+<div class="panel">
+
+  <!-- AI Generator -->
+  <div class="panel-section">
+    <div class="section-title">✦ AI Generator</div>
+    <div class="ai-label"><div class="ai-dot"></div> Descrivi l'emozione in italiano o inglese</div>
+    <textarea class="ai-prompt" id="aiPrompt" placeholder="es. stanco e annoiato, occhi quasi chiusi..."></textarea>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="generateWithAI()">✦ Genera con AI</button>
+    </div>
+    <div class="ai-status" id="aiStatus"></div>
+  </div>
+
+  <!-- Manual Editor -->
+  <div class="panel-section">
+    <div class="section-title">⊞ Editor Manuale</div>
+
+    <div class="subsection-title">Occhi</div>
+    <div class="slider-row">
+      <label>Scala X sinistra</label>
+      <input type="range" id="eyeLsx" min="0.3" max="1.5" step="0.01" value="1" oninput="updatePreview()">
+      <span class="val" id="v_eyeLsx">1.00</span>
+    </div>
+    <div class="slider-row">
+      <label>Scala Y sinistra</label>
+      <input type="range" id="eyeLsy" min="0.05" max="1.5" step="0.01" value="1" oninput="updatePreview()">
+      <span class="val" id="v_eyeLsy">1.00</span>
+    </div>
+    <div class="slider-row">
+      <label>Scala X destra</label>
+      <input type="range" id="eyeRsx" min="0.3" max="1.5" step="0.01" value="1" oninput="updatePreview()">
+      <span class="val" id="v_eyeRsx">1.00</span>
+    </div>
+    <div class="slider-row">
+      <label>Scala Y destra</label>
+      <input type="range" id="eyeRsy" min="0.05" max="1.5" step="0.01" value="1" oninput="updatePreview()">
+      <span class="val" id="v_eyeRsy">1.00</span>
+    </div>
+
+    <div class="toggle-row">
+      <label>Occhio felice</label>
+      <div class="toggle" id="tgl_happy" onclick="toggleOpt('happy')"></div>
+    </div>
+    <div class="toggle-row">
+      <label>Occhio triste</label>
+      <div class="toggle" id="tgl_sad" onclick="toggleOpt('sad')"></div>
+    </div>
+    <div class="toggle-row">
+      <label>Occhio cuore</label>
+      <div class="toggle" id="tgl_heart" onclick="toggleOpt('heart')"></div>
+    </div>
+    <div class="toggle-row">
+      <label>Occhio spaventato</label>
+      <div class="toggle" id="tgl_afraid" onclick="toggleOpt('afraid')"></div>
+    </div>
+
+    <div class="subsection-title">Sopracciglia</div>
+    <div class="slider-row">
+      <label>Angolo sx</label>
+      <input type="range" id="browLangle" min="-0.8" max="0.8" step="0.01" value="0" oninput="updatePreview()">
+      <span class="val" id="v_browLangle">0.00</span>
+    </div>
+    <div class="slider-row">
+      <label>Altezza sx</label>
+      <input type="range" id="browLoy" min="-0.6" max="0.4" step="0.01" value="0" oninput="updatePreview()">
+      <span class="val" id="v_browLoy">0.00</span>
+    </div>
+    <div class="slider-row">
+      <label>Spessore sx</label>
+      <input type="range" id="browLthick" min="0.5" max="2.5" step="0.05" value="1" oninput="updatePreview()">
+      <span class="val" id="v_browLthick">1.00</span>
+    </div>
+    <div class="toggle-row">
+      <label>Visibile sx</label>
+      <div class="toggle on" id="tgl_browLvis" onclick="toggleOpt('browLvis')"></div>
+    </div>
+    <div class="slider-row">
+      <label>Angolo dx</label>
+      <input type="range" id="browRangle" min="-0.8" max="0.8" step="0.01" value="0" oninput="updatePreview()">
+      <span class="val" id="v_browRangle">0.00</span>
+    </div>
+    <div class="slider-row">
+      <label>Altezza dx</label>
+      <input type="range" id="browRoy" min="-0.6" max="0.4" step="0.01" value="0" oninput="updatePreview()">
+      <span class="val" id="v_browRoy">0.00</span>
+    </div>
+    <div class="slider-row">
+      <label>Spessore dx</label>
+      <input type="range" id="browRthick" min="0.5" max="2.5" step="0.05" value="1" oninput="updatePreview()">
+      <span class="val" id="v_browRthick">1.00</span>
+    </div>
+    <div class="toggle-row">
+      <label>Visibile dx</label>
+      <div class="toggle on" id="tgl_browRvis" onclick="toggleOpt('browRvis')"></div>
+    </div>
+
+    <div class="subsection-title">Bocca</div>
+    <div class="select-row">
+      <label>Tipo bocca</label>
+      <select id="mouthType" onchange="updatePreview()">
+        <option value="flat">Flat (neutro)</option>
+        <option value="smile">Smile (sorriso)</option>
+        <option value="bigsmile">Big Smile</option>
+        <option value="frown">Frown (giù)</option>
+        <option value="scowl">Scowl (arrabbiato)</option>
+        <option value="ohh">Ohh (bocca aperta)</option>
+        <option value="sleep">Sleep (dormendo)</option>
+        <option value="tremble">Tremble (tremante)</option>
+        <option value="smirk">Smirk (ironico)</option>
+        <option value="eww">Eww (disgustato)</option>
+        <option value="cryopen">Cry Open (pianto)</option>
+      </select>
+    </div>
+
+    <div class="subsection-title">Effetti extra</div>
+    <div class="select-row">
+      <label>Effetto</label>
+      <select id="extras" onchange="updatePreview()">
+        <option value="">Nessuno</option>
+        <option value="tears">Lacrime</option>
+        <option value="bigcry">Pianto forte</option>
+        <option value="zzz">ZZZ (sonno)</option>
+        <option value="steam">Vapore (rabbia)</option>
+        <option value="sweat">Sudore</option>
+        <option value="confetti">Coriandoli</option>
+        <option value="hearts">Cuori</option>
+      </select>
+    </div>
+
+    <div class="toggle-row" style="margin-top:8px">
+      <label>Pupille visibili</label>
+      <div class="toggle on" id="tgl_pupils" onclick="toggleOpt('pupils')"></div>
+    </div>
+
+    <div class="toggle-row">
+      <label>Guance rosa</label>
+      <div class="toggle" id="tgl_blush" onclick="toggleOpt('blush')"></div>
+    </div>
+  </div>
+
+  <!-- Save -->
+  <div class="panel-section">
+    <div class="section-title">⊕ Salva Emozione</div>
+    <input class="name-input" id="emotionName" type="text" placeholder="Nome emozione (es. nervoso)">
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="saveEmotion()">Salva</button>
+      <button class="btn btn-secondary" onclick="toggleExport()">Esporta JSON</button>
+    </div>
+    <div class="export-code" id="exportCode"></div>
+  </div>
+
+  <!-- Saved Emotions -->
+  <div class="panel-section">
+    <div class="section-title">◈ Emozioni Salvate</div>
+    <div class="saved-list" id="savedList">
+      <div class="empty-state">Nessuna emozione salvata ancora</div>
+    </div>
+  </div>
+
+</div><!-- end panel -->
+
+<script>
+// ──────────────────────────────────────────────
+//  ROBOT FACE ENGINE (from original)
+// ──────────────────────────────────────────────
+const canvas = document.getElementById('face');
+const ctx = canvas.getContext('2d');
+
+function resize() {
+  const s = Math.min(window.innerWidth * 0.55, window.innerHeight * 0.5, 340);
+  canvas.width = s; canvas.height = s;
+}
+resize();
+window.addEventListener('resize', resize);
+
+const BG = '#1a56db', FG = '#ffffff', AQUA = '#2dd4bf',
+      RED = '#ff4d6d', PINK = '#ff8fab', YELLOW = '#ffd60a';
+
+function geo() {
+  const W = canvas.width, cx = W/2, cy = W/2;
+  return { W, cx, cy, gap: W*0.195, eyeR: W*0.135, eyeY: cy+W*0.025, browH: W*0.052 };
+}
+
+let currentMood = 'neutral', targetMood = 'neutral';
+let animT = 1, animDur = 0.42;
+let lookX = 0, lookY = 0, tlx = 0, tly = 0;
+let blinkT = -1, blinkTimer = null;
+let particles = [], squishT = 0, tearDrops = [];
+let heartPulse = 0, zzzT = 0, tearT = 0;
+
+// Built-in moods
+const BUILTIN = {
+  neutral:     { eyeL:{sx:1,sy:1},    eyeR:{sx:1,sy:1},    browL:{angle:0,oy:0,vis:true,thick:1},     browR:{angle:0,oy:0,vis:true,thick:1},    mouthType:'flat',     pupils:true,  extras:null,       blush:false },
+  happy:       { eyeL:{sx:1,sy:1,happy:true},eyeR:{sx:1,sy:1,happy:true}, browL:{angle:-0.22,oy:-0.2,vis:true,thick:1},browR:{angle:0.22,oy:-0.2,vis:true,thick:1},mouthType:'smile',pupils:false,extras:null,blush:true},
+  sad:         { eyeL:{sx:1,sy:0.85,sad:true},eyeR:{sx:1,sy:0.85,sad:true},browL:{angle:0.38,oy:0.1,vis:true,thick:1},browR:{angle:-0.38,oy:0.1,vis:true,thick:1},mouthType:'frown',pupils:true,extras:'tears',blush:false},
+  angry:       { eyeL:{sx:1,sy:0.6,angryL:true},eyeR:{sx:1,sy:0.6,angryR:true},browL:{angle:0.45,oy:-0.05,vis:true,thick:1.6},browR:{angle:-0.45,oy:-0.05,vis:true,thick:1.6},mouthType:'scowl',pupils:true,extras:'steam',blush:false},
+  surprised:   { eyeL:{sx:1.18,sy:1.22},eyeR:{sx:1.18,sy:1.22},browL:{angle:0,oy:-0.5,vis:true,thick:1},browR:{angle:0,oy:-0.5,vis:true,thick:1},mouthType:'ohh',pupils:true,extras:null,blush:false},
+  sleeping:    { eyeL:{sx:1,sy:0.12},eyeR:{sx:1,sy:0.12},browL:{angle:0,oy:0,vis:false,thick:1},browR:{angle:0,oy:0,vis:false,thick:1},mouthType:'sleep',pupils:false,extras:'zzz',blush:false},
+  afraid:      { eyeL:{sx:1.15,sy:1.25,afraid:true},eyeR:{sx:1.15,sy:1.25,afraid:true},browL:{angle:-0.28,oy:-0.38,vis:true,thick:1},browR:{angle:0.28,oy:-0.38,vis:true,thick:1},mouthType:'tremble',pupils:true,extras:'sweat',blush:false},
+  skeptical:   { eyeL:{sx:1,sy:0.55},eyeR:{sx:1,sy:1},browL:{angle:-0.22,oy:-0.08,vis:true,thick:1},browR:{angle:0.12,oy:0.1,vis:true,thick:1},mouthType:'smirk',pupils:true,extras:null,blush:false},
+  celebrating: { eyeL:{sx:1,sy:1,happy:true},eyeR:{sx:1,sy:1,happy:true},browL:{angle:-0.28,oy:-0.22,vis:true,thick:1},browR:{angle:0.28,oy:-0.22,vis:true,thick:1},mouthType:'bigsmile',pupils:false,extras:'confetti',blush:true},
+  disgusted:   { eyeL:{sx:1,sy:0.55},eyeR:{sx:1,sy:0.7},browL:{angle:0.15,oy:-0.05,vis:true,thick:1.4},browR:{angle:-0.3,oy:-0.12,vis:true,thick:1.4},mouthType:'eww',pupils:true,extras:null,blush:false},
+  love:        { eyeL:{sx:1,sy:1,heart:true},eyeR:{sx:1,sy:1,heart:true},browL:{angle:-0.2,oy:-0.18,vis:true,thick:1},browR:{angle:0.2,oy:-0.18,vis:true,thick:1},mouthType:'smile',pupils:false,extras:'hearts',blush:true},
+  crying:      { eyeL:{sx:1,sy:0.9,sad:true},eyeR:{sx:1,sy:0.9,sad:true},browL:{angle:0.42,oy:0.12,vis:true,thick:1},browR:{angle:-0.42,oy:0.12,vis:true,thick:1},mouthType:'cryopen',pupils:true,extras:'bigcry',blush:false},
+};
+
+// All moods = built-in + custom
+let M = Object.assign({}, BUILTIN);
+
+// Toggle state
+const topts = { happy:false, sad:false, heart:false, afraid:false, pupils:true, blush:false, browLvis:true, browRvis:true };
+
+function lerp(a,b,t){return a+(b-a)*t;}
+function easeBounce(t){const c4=(2*Math.PI)/3;if(t===0)return 0;if(t===1)return 1;return Math.pow(2,-10*t)*Math.sin((t*10-0.75)*c4)+1;}
+
+function setMood(m){
+  if(!M[m])return;
+  currentMood=targetMood; targetMood=m; animT=0; squishT=0;
+  document.querySelectorAll('.mood-btn').forEach(b=>b.classList.remove('active','custom-active'));
+  const btn = document.querySelector(`.mood-btn[data-mood="${m}"]`);
+  if(btn) btn.classList.add(BUILTIN[m]?'active':'custom-active');
+  document.getElementById('currentLabel').textContent = m.toUpperCase();
+  if(m==='celebrating') spawnConfetti();
+  if(m==='sad'||m==='crying') spawnTears();
+  tearT=0; heartPulse=0; zzzT=0;
+}
+
+function spawnConfetti(){
+  particles=[];
+  for(let i=0;i<32;i++){
+    const g=geo();
+    particles.push({x:g.cx+(Math.random()-0.5)*g.eyeR*6,y:g.eyeY-g.eyeR*1.5,vx:(Math.random()-0.5)*5,vy:-(2+Math.random()*5),color:[AQUA,FG,YELLOW,PINK][Math.floor(Math.random()*4)],r:3+Math.random()*5,life:1,decay:0.01+Math.random()*0.01,rot:Math.random()*Math.PI*2,rspeed:(Math.random()-0.5)*0.2});
+  }
+}
+function spawnTears(){tearDrops=[];}
+
+function doBlink(){if(blinkT>=0||targetMood==='sleeping'){scheduleBlink();return;}blinkT=0;scheduleBlink();}
+function scheduleBlink(){clearTimeout(blinkTimer);blinkTimer=setTimeout(doBlink,1800+Math.random()*2800);}
+
+document.addEventListener('mousemove',e=>{
+  const cx=window.innerWidth/2,cy=window.innerHeight/2;
+  tlx=Math.max(-1,Math.min(1,(e.clientX-cx)/(window.innerWidth*0.35)));
+  tly=Math.max(-1,Math.min(1,(e.clientY-cy)/(window.innerHeight*0.35)));
+});
+
+function drawEye(x,y,r,mood,blinkFrac,lx,ly){
+  const {sx,sy}=mood;
+  const aSY=sy*(1-blinkFrac);
+  if(mood.heart){
+    ctx.save();ctx.translate(x,y);ctx.scale(sx,Math.max(0.01,aSY));
+    ctx.beginPath();const hs=r*0.62;
+    ctx.moveTo(0,hs*0.3);ctx.bezierCurveTo(hs,-hs*0.5,hs*2.2,hs*0.8,0,hs*2);
+    ctx.bezierCurveTo(-hs*2.2,hs*0.8,-hs,-hs*0.5,0,hs*0.3);
+    ctx.fillStyle=RED;ctx.fill();ctx.restore();return;
+  }
+  if(mood.happy){
+    ctx.save();ctx.translate(x,y);ctx.scale(sx,Math.max(0.01,aSY));
+    ctx.beginPath();ctx.arc(0,0,r,Math.PI,0,false);ctx.closePath();
+    ctx.fillStyle=FG;ctx.fill();ctx.restore();return;
+  }
+  if(mood.sad){
+    ctx.save();ctx.translate(x,y);ctx.scale(sx,Math.max(0.01,aSY));
+    ctx.beginPath();ctx.arc(0,r*0.25,r*0.85,Math.PI,0,true);ctx.closePath();
+    ctx.fillStyle=FG;ctx.fill();ctx.restore();return;
+  }
+  if(mood.afraid){
+    ctx.save();ctx.translate(x,y);ctx.scale(sx,Math.max(0.01,aSY));
+    ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.fillStyle=FG;ctx.fill();
+    ctx.beginPath();ctx.arc(0,0,r*0.78,0,Math.PI*2);ctx.fillStyle=AQUA;ctx.fill();
+    ctx.beginPath();ctx.arc(0,0,r*0.5,0,Math.PI*2);ctx.fillStyle=BG;ctx.fill();
+    ctx.beginPath();ctx.arc(-r*0.15,-r*0.15,r*0.18,0,Math.PI*2);ctx.fillStyle=FG;ctx.fill();
+    ctx.restore();return;
+  }
+  ctx.save();ctx.translate(x,y);ctx.scale(sx,Math.max(0.01,aSY));
+  ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.fillStyle=FG;ctx.fill();
+  if(blinkFrac<0.8 && M[targetMood]&&(M[targetMood].pupils!==false)){
+    const maxP=r*0.44,px=lx*r*0.36,py=ly*r*0.3;
+    ctx.beginPath();ctx.arc(px,py,maxP,0,Math.PI*2);ctx.fillStyle=BG;ctx.fill();
+    ctx.beginPath();ctx.arc(px-maxP*0.28,py-maxP*0.28,maxP*0.26,0,Math.PI*2);ctx.fillStyle=FG;ctx.fill();
+    ctx.beginPath();ctx.arc(px+maxP*0.22,py-maxP*0.35,maxP*0.12,0,Math.PI*2);ctx.fillStyle=FG;ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawBrow(x,y,r,angle,oy,vis,browH,thick){
+  if(!vis)return;
+  const len=r*1.08, baseY=r*1.15, shiftY=oy*r;
+  ctx.save();ctx.translate(x,y-baseY+shiftY);ctx.rotate(angle);
+  ctx.beginPath();ctx.moveTo(-len,0);ctx.lineTo(len,0);
+  ctx.strokeStyle=FG;ctx.lineWidth=browH*(thick||1);ctx.lineCap='round';ctx.stroke();
+  ctx.restore();
+}
+
+function drawMouth(cx,mouthY,r,type,t){
+  const w=r*1.1,h=r*0.45;
+  ctx.save();ctx.strokeStyle=FG;ctx.fillStyle=FG;ctx.lineCap='round';ctx.lineJoin='round';
+  switch(type){
+    case 'flat': ctx.lineWidth=r*0.18;ctx.beginPath();ctx.moveTo(cx-w*0.5,mouthY);ctx.lineTo(cx+w*0.5,mouthY);ctx.stroke();break;
+    case 'smile': ctx.lineWidth=r*0.19;ctx.beginPath();ctx.arc(cx,mouthY-h*0.6,w*0.55,0.3,Math.PI-0.3);ctx.stroke();break;
+    case 'bigsmile':
+      ctx.lineWidth=r*0.17;ctx.beginPath();ctx.arc(cx,mouthY-h*0.5,w*0.65,0.2,Math.PI-0.2);ctx.stroke();
+      ctx.save();ctx.globalAlpha=0.8;ctx.fillStyle=FG;
+      ctx.beginPath();ctx.ellipse(cx,mouthY-h*0.1,w*0.45,h*0.4,0,0,Math.PI);ctx.fill();ctx.restore();break;
+    case 'frown': ctx.lineWidth=r*0.18;ctx.beginPath();ctx.arc(cx,mouthY+h*0.6,w*0.55,Math.PI+0.3,-0.3);ctx.stroke();break;
+    case 'scowl': ctx.lineWidth=r*0.22;ctx.beginPath();ctx.arc(cx,mouthY+h*0.8,w*0.5,Math.PI+0.4,-0.4);ctx.stroke();break;
+    case 'ohh': ctx.beginPath();ctx.ellipse(cx,mouthY,r*0.32,r*0.42,0,0,Math.PI*2);ctx.fill();break;
+    case 'sleep': ctx.lineWidth=r*0.15;ctx.globalAlpha=0.5;ctx.beginPath();ctx.arc(cx,mouthY-h*0.2,w*0.35,0.4,Math.PI-0.4);ctx.stroke();break;
+    case 'tremble':{ctx.lineWidth=r*0.18;const wobble=Math.sin(t*18)*r*0.05;ctx.beginPath();ctx.moveTo(cx-w*0.5,mouthY+wobble);ctx.bezierCurveTo(cx-w*0.15,mouthY-wobble,cx+w*0.15,mouthY+wobble,cx+w*0.5,mouthY-wobble);ctx.stroke();break;}
+    case 'smirk': ctx.lineWidth=r*0.17;ctx.beginPath();ctx.moveTo(cx-w*0.4,mouthY+r*0.05);ctx.bezierCurveTo(cx-w*0.1,mouthY+r*0.05,cx+w*0.2,mouthY-r*0.2,cx+w*0.45,mouthY-r*0.28);ctx.stroke();break;
+    case 'eww': ctx.lineWidth=r*0.18;ctx.beginPath();ctx.moveTo(cx-w*0.4,mouthY-r*0.05);ctx.bezierCurveTo(cx-w*0.1,mouthY+r*0.18,cx+w*0.05,mouthY+r*0.22,cx+w*0.2,mouthY+r*0.08);ctx.bezierCurveTo(cx+w*0.35,mouthY-r*0.1,cx+w*0.4,mouthY-r*0.1,cx+w*0.42,mouthY-r*0.05);ctx.stroke();break;
+    case 'cryopen': ctx.lineWidth=r*0.17;ctx.beginPath();ctx.arc(cx,mouthY+h*0.5,w*0.5,Math.PI+0.15,-0.15);ctx.stroke();ctx.fillStyle=BG;ctx.globalAlpha=0.6;ctx.beginPath();ctx.ellipse(cx,mouthY+h*0.6,w*0.38,h*0.38,0,0,Math.PI);ctx.fill();break;
+  }
+  ctx.restore();
+}
+
+function drawZzz(eyeRX,eyeY,r,t){
+  const sizes=[r*0.52,r*0.4,r*0.3];
+  const offs=[{x:r*1.7,y:-r*0.4},{x:r*2.3,y:-r*1.1},{x:r*2.75,y:-r*1.7}];
+  for(let i=0;i<3;i++){const phase=(t*0.75+i*0.33)%1;const alpha=Math.sin(phase*Math.PI);ctx.save();ctx.globalAlpha=alpha*0.9;ctx.font=`bold ${sizes[i]*2.1}px Helvetica Neue,Arial`;ctx.fillStyle=FG;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('z',eyeRX+offs[i].x,eyeY+offs[i].y);ctx.restore();}
+}
+function drawSweat(x,y,r,t){const bob=Math.sin(t*4)*3;ctx.save();ctx.translate(x+r*1.35,y-r*0.15+bob);ctx.beginPath();ctx.moveTo(0,-r*0.55);ctx.bezierCurveTo(r*0.32,-r*0.08,r*0.32,r*0.42,0,r*0.55);ctx.bezierCurveTo(-r*0.32,r*0.42,-r*0.32,-r*0.08,0,-r*0.55);ctx.fillStyle=AQUA;ctx.globalAlpha=0.92;ctx.fill();ctx.restore();}
+function drawSteam(x,y,r,t){for(let i=0;i<2;i++){const ox=(i===0?-r*0.5:r*0.5);const phase=(t*1.2+i*0.5)%1;const sy=y-r*1.1-phase*r*1.2;const alpha=Math.sin(phase*Math.PI)*0.7;ctx.save();ctx.globalAlpha=alpha;ctx.strokeStyle=FG;ctx.lineWidth=r*0.15;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(x+ox,sy+r*0.5);ctx.bezierCurveTo(x+ox+r*0.3,sy+r*0.2,x+ox-r*0.3,sy,x+ox,sy-r*0.3);ctx.stroke();ctx.restore();}}
+function drawHearts(cx,eyeY,r,t){const bh=[{ox:-r*2.5,oy:-r*1.6,phase:0},{ox:r*2.5,oy:-r*1.8,phase:0.5},{ox:0,oy:-r*2.6,phase:0.25}];for(const h of bh){const phase=(t*0.6+h.phase)%1;const alpha=Math.sin(phase*Math.PI)*0.9;const scale=0.5+phase*0.8;ctx.save();ctx.globalAlpha=alpha;ctx.translate(cx+h.ox,eyeY+h.oy-phase*r*1.5);ctx.scale(scale,scale);const hs=r*0.5;ctx.beginPath();ctx.moveTo(0,hs*0.3);ctx.bezierCurveTo(hs,-hs*0.5,hs*2.2,hs*0.8,0,hs*2);ctx.bezierCurveTo(-hs*2.2,hs*0.8,-hs,-hs*0.5,0,hs*0.3);ctx.fillStyle=RED;ctx.fill();ctx.restore();}}
+function drawBigCry(eyeLX,eyeRX,eyeY,r,t){const streams=[{x:eyeLX-r*0.3},{x:eyeLX+r*0.2},{x:eyeRX-r*0.2},{x:eyeRX+r*0.3}];for(let i=0;i<streams.length;i++){const phase=(t*1.5+i*0.25)%1;const startY=eyeY+r;const endY=eyeY+r+r*4*phase;const alpha=Math.min(1,(1-phase)*2);ctx.save();ctx.globalAlpha=alpha;ctx.strokeStyle=AQUA;ctx.lineWidth=r*0.2;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(streams[i].x,startY);ctx.lineTo(streams[i].x,endY);ctx.stroke();ctx.restore();}}
+
+let lastTs=0;
+function draw(ts){
+  requestAnimationFrame(draw);
+  const dt=Math.min((ts-lastTs)/1000,0.05);lastTs=ts;
+  const W=canvas.width;ctx.clearRect(0,0,W,W);
+  const g=geo();const{eyeR,browH}=g;
+  lookX+=(tlx-lookX)*0.1; lookY+=(tly-lookY)*0.1;
+  if(animT<1)animT=Math.min(1,animT+dt/animDur);
+  const te=easeBounce(animT);
+  const fromM=M[currentMood],toM=M[targetMood];
+  function lerpEye(a,b){return{sx:lerp(a.sx,b.sx,te),sy:lerp(a.sy,b.sy,te),happy:te>0.5?b.happy:a.happy,sad:te>0.5?b.sad:a.sad,afraid:te>0.5?b.afraid:a.afraid,heart:te>0.5?b.heart:a.heart};}
+  function lerpBrow(a,b){return{angle:lerp(a.angle,b.angle,te),oy:lerp(a.oy,b.oy,te),vis:te>0.5?b.vis:a.vis,thick:lerp(a.thick||1,b.thick||1,te)};}
+  const eyeLS=lerpEye(fromM.eyeL,toM.eyeL);
+  const eyeRS=lerpEye(fromM.eyeR,toM.eyeR);
+  const browLS=lerpBrow(fromM.browL,toM.browL);
+  const browRS=lerpBrow(fromM.browR,toM.browR);
+  const mouthType=te>0.5?toM.mouthType:fromM.mouthType;
+  if(blinkT>=0){blinkT+=dt*7;if(blinkT>1)blinkT=-1;}
+  const blinkFrac=blinkT>=0?Math.max(0,Math.sin(blinkT*Math.PI)):0;
+  const eyeLX=g.cx-g.gap-eyeR*0.08;
+  const eyeRX=g.cx+g.gap+eyeR*0.08;
+  const eyeY=g.eyeY;
+  const mouthY=eyeY+eyeR*1.9;
+  squishT=Math.min(squishT+dt*3,1);
+  const sq=1+0.14*Math.sin(squishT*Math.PI)*(1-squishT);
+  ctx.save();
+  ctx.translate(g.cx,eyeY);ctx.scale(sq,2-sq);ctx.translate(-g.cx,-eyeY);
+  drawEye(eyeLX,eyeY,eyeR,eyeLS,blinkFrac,lookX,lookY);
+  drawBrow(eyeLX,eyeY,eyeR,browLS.angle,browLS.oy,browLS.vis,browH,browLS.thick);
+  drawEye(eyeRX,eyeY,eyeR,eyeRS,blinkFrac,lookX,lookY);
+  drawBrow(eyeRX,eyeY,eyeR,browRS.angle,browRS.oy,browRS.vis,browH,browRS.thick);
+  drawMouth(g.cx,mouthY,eyeR,mouthType,ts/1000);
+  // blush
+  const showBlush = toM.blush && te>0.5;
+  if(showBlush){
+    const blushAlpha=0.28*Math.min(1,animT*2);
+    ctx.save();ctx.globalAlpha=blushAlpha;ctx.fillStyle=PINK;
+    ctx.beginPath();ctx.ellipse(eyeLX-eyeR*1.05,eyeY+eyeR*0.7,eyeR*0.75,eyeR*0.38,0,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.ellipse(eyeRX+eyeR*1.05,eyeY+eyeR*0.7,eyeR*0.75,eyeR*0.38,0,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+  const extras=toM.extras;
+  if(extras==='zzz'){zzzT+=dt;drawZzz(eyeRX,eyeY,eyeR,zzzT);}
+  if(extras==='sweat')drawSweat(eyeRX,eyeY,eyeR,ts/1000);
+  if(extras==='steam'){drawSteam(eyeLX,eyeY,eyeR,ts/1000);drawSteam(eyeRX,eyeY,eyeR,ts/1000+0.3);}
+  if(extras==='hearts'){heartPulse+=dt;drawHearts(g.cx,eyeY,eyeR,heartPulse);}
+  if(extras==='tears'||extras==='bigcry'){tearT+=dt;drawBigCry(eyeLX,eyeRX,eyeY,eyeR,extras==='bigcry'?tearT*1.5:tearT);}
+  if(extras==='confetti'||particles.length>0){
+    for(let i=particles.length-1;i>=0;i--){
+      const p=particles[i];p.x+=p.vx;p.y+=p.vy;p.vy+=0.16;p.life-=p.decay;p.rot+=p.rspeed;
+      if(p.life<=0){particles.splice(i,1);continue;}
+      ctx.save();ctx.globalAlpha=p.life;ctx.translate(p.x,p.y);ctx.rotate(p.rot);
+      ctx.fillStyle=p.color;ctx.fillRect(-p.r/2,-p.r/2,p.r,p.r);ctx.restore();
+    }
+  }
+}
+
+// ──────────────────────────────────────────────
+//  EDITOR / PREVIEW
+// ──────────────────────────────────────────────
+const PREVIEW_KEY = '__preview__';
+
+function getSlider(id){ return parseFloat(document.getElementById(id).value); }
+function isOn(key){ return topts[key]===true; }
+
+function toggleOpt(key){
+  topts[key]=!topts[key];
+  const el = document.getElementById('tgl_'+key);
+  if(el) el.classList.toggle('on', topts[key]);
+  updatePreview();
+}
+
+function syncSliderVal(id){
+  document.getElementById('v_'+id).textContent = parseFloat(document.getElementById(id).value).toFixed(2);
+}
+
+function buildCurrentDef(){
+  ['eyeLsx','eyeLsy','eyeRsx','eyeRsy','browLangle','browLoy','browLthick','browRangle','browRoy','browRthick'].forEach(syncSliderVal);
+  return {
+    eyeL:{ sx:getSlider('eyeLsx'), sy:getSlider('eyeLsy'), happy:isOn('happy'), sad:isOn('sad'), heart:isOn('heart'), afraid:isOn('afraid') },
+    eyeR:{ sx:getSlider('eyeRsx'), sy:getSlider('eyeRsy'), happy:isOn('happy'), sad:isOn('sad'), heart:isOn('heart'), afraid:isOn('afraid') },
+    browL:{ angle:getSlider('browLangle'), oy:getSlider('browLoy'), vis:isOn('browLvis'), thick:getSlider('browLthick') },
+    browR:{ angle:getSlider('browRangle'), oy:getSlider('browRoy'), vis:isOn('browRvis'), thick:getSlider('browRthick') },
+    mouthType: document.getElementById('mouthType').value,
+    pupils: isOn('pupils'),
+    extras: document.getElementById('extras').value || null,
+    blush: isOn('blush'),
+  };
+}
+
+function updatePreview(){
+  const def = buildCurrentDef();
+  M[PREVIEW_KEY] = def;
+  setMood(PREVIEW_KEY);
+}
+
+// Load a mood into the editor sliders
+function loadMoodIntoEditor(name){
+  const m = M[name];
+  if(!m) return;
+  document.getElementById('eyeLsx').value = m.eyeL.sx;
+  document.getElementById('eyeLsy').value = m.eyeL.sy;
+  document.getElementById('eyeRsx').value = m.eyeR.sx;
+  document.getElementById('eyeRsy').value = m.eyeR.sy;
+  document.getElementById('browLangle').value = m.browL.angle;
+  document.getElementById('browLoy').value = m.browL.oy;
+  document.getElementById('browLthick').value = m.browL.thick||1;
+  document.getElementById('browRangle').value = m.browR.angle;
+  document.getElementById('browRoy').value = m.browR.oy;
+  document.getElementById('browRthick').value = m.browR.thick||1;
+  document.getElementById('mouthType').value = m.mouthType;
+  document.getElementById('extras').value = m.extras||'';
+  topts.happy = !!m.eyeL.happy;
+  topts.sad = !!m.eyeL.sad;
+  topts.heart = !!m.eyeL.heart;
+  topts.afraid = !!m.eyeL.afraid;
+  topts.pupils = m.pupils!==false;
+  topts.blush = !!m.blush;
+  topts.browLvis = m.browL.vis!==false;
+  topts.browRvis = m.browR.vis!==false;
+  ['happy','sad','heart','afraid','pupils','blush','browLvis','browRvis'].forEach(k=>{
+    const el=document.getElementById('tgl_'+k);
+    if(el) el.classList.toggle('on', topts[k]);
+  });
+  ['eyeLsx','eyeLsy','eyeRsx','eyeRsy','browLangle','browLoy','browLthick','browRangle','browRoy','browRthick'].forEach(syncSliderVal);
+  updatePreview();
+}
+
+// ──────────────────────────────────────────────
+//  SAVED EMOTIONS
+// ──────────────────────────────────────────────
+let savedEmotions = {};
+let activeCustom = null;
+
+function saveEmotion(){
+  const name = document.getElementById('emotionName').value.trim();
+  if(!name){ alert('Inserisci un nome per l\'emozione'); return; }
+  const def = buildCurrentDef();
+  savedEmotions[name] = def;
+  M[name] = def;
+  renderSavedList();
+  // Add button if not there
+  if(!document.querySelector(`.mood-btn[data-mood="${name}"]`)){
+    const btn = document.createElement('button');
+    btn.className='mood-btn';
+    btn.dataset.mood=name;
+    btn.textContent=name;
+    btn.onclick=()=>setMood(name);
+    document.querySelector('.test-moods').appendChild(btn);
+  }
+  setMood(name);
+}
+
+function renderSavedList(){
+  const list = document.getElementById('savedList');
+  const keys = Object.keys(savedEmotions);
+  if(!keys.length){ list.innerHTML='<div class="empty-state">Nessuna emozione salvata ancora</div>'; return; }
+  list.innerHTML = keys.map(k=>`
+    <div class="saved-item ${activeCustom===k?'active':''}" onclick="loadSaved('${k}')">
+      <span class="saved-name">${k}</span>
+      <span class="saved-delete" onclick="event.stopPropagation();deleteSaved('${k}')" title="Elimina">✕</span>
+    </div>
+  `).join('');
+}
+
+function loadSaved(name){
+  activeCustom = name;
+  document.getElementById('emotionName').value = name;
+  loadMoodIntoEditor(name);
+  renderSavedList();
+}
+
+function deleteSaved(name){
+  delete savedEmotions[name];
+  delete M[name];
+  const btn=document.querySelector(`.mood-btn[data-mood="${name}"]`);
+  if(btn) btn.remove();
+  if(activeCustom===name){activeCustom=null;setMood('neutral');}
+  renderSavedList();
+}
+
+function toggleExport(){
+  const box = document.getElementById('exportCode');
+  box.classList.toggle('show');
+  if(box.classList.contains('show')){
+    box.textContent = JSON.stringify(savedEmotions, null, 2);
+  }
+}
+
+// ──────────────────────────────────────────────
+//  AI GENERATOR
+// ──────────────────────────────────────────────
+async function generateWithAI(){
+  const prompt = document.getElementById('aiPrompt').value.trim();
+  if(!prompt){ alert('Scrivi una descrizione dell\'emozione prima'); return; }
+  const status = document.getElementById('aiStatus');
+  status.textContent = '✦ Generazione in corso...';
+
+  const systemPrompt = `Sei un esperto di espressioni facciali di robot cartoon. Devi tradurre descrizioni di emozioni in parametri numerici per una faccina robot.
+
+Rispondi SOLO con un oggetto JSON valido (senza markdown, senza backtick), con questa struttura esatta:
+{
+  "eyeL": { "sx": 1.0, "sy": 1.0, "happy": false, "sad": false, "heart": false, "afraid": false },
+  "eyeR": { "sx": 1.0, "sy": 1.0, "happy": false, "sad": false, "heart": false, "afraid": false },
+  "browL": { "angle": 0.0, "oy": 0.0, "vis": true, "thick": 1.0 },
+  "browR": { "angle": 0.0, "oy": 0.0, "vis": true, "thick": 1.0 },
+  "mouthType": "flat",
+  "pupils": true,
+  "extras": null,
+  "blush": false
+}
+
+Regole parametri:
+- eyeL/eyeR sx: scala orizzontale (0.3-1.5, default 1.0)
+- eyeL/eyeR sy: scala verticale (0.05-1.5, default 1.0). Valori bassi = occhio quasi chiuso
+- happy/sad/heart/afraid: true SOLO uno alla volta. happy = occhio a mezzaluna. sad = occhio invertito. heart = occhio a cuore. afraid = occhio con anello
+- browL.angle: rotazione sopracciglio sx (-0.8 a 0.8). Positivo = rabbia/tristezza sx. Negativo = sollievo/gioia
+- browR.angle: rotazione sopracciglio dx (-0.8 a 0.8). Negativo = rabbia dx. Positivo = tristezza dx
+- browL/browR oy: altezza sopracciglio (-0.6 = alto, 0.4 = basso)
+- browL/browR thick: spessore (0.5-2.5). Valori alti = rabbia
+- mouthType: "flat"|"smile"|"bigsmile"|"frown"|"scowl"|"ohh"|"sleep"|"tremble"|"smirk"|"eww"|"cryopen"
+- extras: null|"tears"|"bigcry"|"zzz"|"steam"|"sweat"|"confetti"|"hearts"
+- blush: true per emozioni positive/amore/imbarazzo
+- pupils: false quando occhi chiusi o speciali
+
+Nota bene: per le sopracciglia la simmetria conta. Per esprimere rabbia: browL.angle positivo + browR.angle negativo. Per tristezza: browL.angle positivo + browR.angle negativo (meno estremo). Per gioia: browL.angle negativo + browR.angle positivo.`;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: `Descrizione emozione: "${prompt}"\n\nGenera i parametri JSON per questa emozione.` }]
+      })
+    });
+    const data = await res.json();
+    const text = data.content.map(i=>i.text||'').join('').trim();
+    // Strip any stray markdown
+    const clean = text.replace(/```json|```/g,'').trim();
+    const def = JSON.parse(clean);
+    // Apply to editor
+    applyDefToEditor(def);
+    updatePreview();
+    // Suggest a name
+    const suggested = prompt.split(' ').slice(0,2).join('_').toLowerCase().replace(/[^a-z0-9_]/g,'');
+    document.getElementById('emotionName').value = suggested || 'nuova_emozione';
+    status.textContent = '✓ Emozione generata! Puoi modificarla e salvarla.';
+  } catch(e) {
+    status.textContent = '✗ Errore: ' + e.message;
+  }
+}
+
+function applyDefToEditor(def){
+  if(def.eyeL){
+    document.getElementById('eyeLsx').value = def.eyeL.sx||1;
+    document.getElementById('eyeLsy').value = def.eyeL.sy||1;
+    topts.happy = !!def.eyeL.happy;
+    topts.sad = !!def.eyeL.sad;
+    topts.heart = !!def.eyeL.heart;
+    topts.afraid = !!def.eyeL.afraid;
+  }
+  if(def.eyeR){
+    document.getElementById('eyeRsx').value = def.eyeR.sx||1;
+    document.getElementById('eyeRsy').value = def.eyeR.sy||1;
+  }
+  if(def.browL){
+    document.getElementById('browLangle').value = def.browL.angle||0;
+    document.getElementById('browLoy').value = def.browL.oy||0;
+    document.getElementById('browLthick').value = def.browL.thick||1;
+    topts.browLvis = def.browL.vis!==false;
+  }
+  if(def.browR){
+    document.getElementById('browRangle').value = def.browR.angle||0;
+    document.getElementById('browRoy').value = def.browR.oy||0;
+    document.getElementById('browRthick').value = def.browR.thick||1;
+    topts.browRvis = def.browR.vis!==false;
+  }
+  if(def.mouthType) document.getElementById('mouthType').value = def.mouthType;
+  if(def.extras!==undefined) document.getElementById('extras').value = def.extras||'';
+  topts.pupils = def.pupils!==false;
+  topts.blush = !!def.blush;
+  ['happy','sad','heart','afraid','pupils','blush','browLvis','browRvis'].forEach(k=>{
+    const el=document.getElementById('tgl_'+k);
+    if(el) el.classList.toggle('on', topts[k]);
+  });
+  ['eyeLsx','eyeLsy','eyeRsx','eyeRsy','browLangle','browLoy','browLthick','browRangle','browRoy','browRthick'].forEach(syncSliderVal);
+}
+
+// ──────────────────────────────────────────────
+//  INIT
+// ──────────────────────────────────────────────
+// Init preview mood
+M[PREVIEW_KEY] = M['neutral'];
+setMood('neutral');
+scheduleBlink();
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

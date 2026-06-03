@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Robot Face – Cartoon</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a56db;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    overflow: hidden;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+  }
+  canvas#face { display: block; }
+  .controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-top: 28px;
+    max-width: 600px;
+    padding: 0 16px;
+  }
+  .mood-btn {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 7px 16px;
+    border: 2px solid rgba(255,255,255,0.35);
+    background: transparent;
+    color: rgba(255,255,255,0.6);
+    border-radius: 99px;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-transform: uppercase;
+  }
+  .mood-btn:hover  { border-color: #fff; color: #fff; }
+  .mood-btn.active { background: #fff; color: #1a56db; border-color: #fff; }
+  .mood-btn:active { transform: scale(0.95); }
+</style>
+</head>
+<body>
+<canvas id="face"></canvas>
+<div class="controls">
+  <button class="mood-btn active" data-mood="neutral"     onclick="setMood('neutral')">Neutral</button>
+  <button class="mood-btn"        data-mood="happy"       onclick="setMood('happy')">Happy</button>
+  <button class="mood-btn"        data-mood="sad"         onclick="setMood('sad')">Sad</button>
+  <button class="mood-btn"        data-mood="angry"       onclick="setMood('angry')">Angry</button>
+  <button class="mood-btn"        data-mood="surprised"   onclick="setMood('surprised')">Surprised</button>
+  <button class="mood-btn"        data-mood="sleeping"    onclick="setMood('sleeping')">Sleeping</button>
+  <button class="mood-btn"        data-mood="afraid"      onclick="setMood('afraid')">Afraid</button>
+  <button class="mood-btn"        data-mood="skeptical"   onclick="setMood('skeptical')">Sceptical</button>
+  <button class="mood-btn"        data-mood="celebrating" onclick="setMood('celebrating')">Celebrating</button>
+  <button class="mood-btn"        data-mood="disgusted"   onclick="setMood('disgusted')">Disgusted</button>
+  <button class="mood-btn"        data-mood="love"        onclick="setMood('love')">In love</button>
+  <button class="mood-btn"        data-mood="crying"      onclick="setMood('crying')">Crying</button>
+</div>
+<script>
+const canvas = document.getElementById('face');
+const ctx = canvas.getContext('2d');
+
+function resize() {
+  const s = Math.min(window.innerWidth * 0.85, window.innerHeight * 0.58, 520);
+  canvas.width = s; canvas.height = s;
+}
+resize();
+window.addEventListener('resize', resize);
+
+const BG = '#1a56db', FG = '#ffffff', AQUA = '#2dd4bf',
+      RED = '#ff4d6d', PINK = '#ff8fab', YELLOW = '#ffd60a';
+
+function geo() {
+  const W = canvas.width, cx = W/2, cy = W/2;
+  return {
+    W, cx, cy,
+    gap:   W * 0.195,
+    eyeR:  W * 0.135,
+    eyeY:  cy + W * 0.025,
+    browH: W * 0.052,
+    browBase: W * 0.135 * 1.15, // base distance above eye center
+  };
+}
+
+// State
+let currentMood = 'neutral', targetMood = 'neutral';
+let animT = 1, animDur = 0.42;
+let lookX = 0, lookY = 0, tlx = 0, tly = 0;
+let lookTimer = null, blinkT = -1, blinkTimer = null;
+let particles = [], squishT = 0, tearDrops = [];
+let heartPulse = 0;
+
+// ─── Mood definitions ─────────────────────────────────────────
+// oy: fraction of eyeR (positive = closer to eye, negative = further away)
+const M = {
+  neutral: {
+    eyeL:{sx:1,sy:1}, eyeR:{sx:1,sy:1},
+    browL:{angle:0,   oy:0,   vis:true,  thick:1},
+    browR:{angle:0,   oy:0,   vis:true,  thick:1},
+    mouthType:'flat', pupils:true, extras:null,
+  },
+  happy: {
+    eyeL:{sx:1,sy:1,happy:true}, eyeR:{sx:1,sy:1,happy:true},
+    browL:{angle:-0.22,oy:-0.2, vis:true,  thick:1},
+    browR:{angle: 0.22,oy:-0.2, vis:true,  thick:1},
+    mouthType:'smile', pupils:false, extras:null,
+  },
+  sad: {
+    eyeL:{sx:1,sy:0.85,sad:true}, eyeR:{sx:1,sy:0.85,sad:true},
+    browL:{angle: 0.38,oy: 0.1, vis:true,  thick:1},
+    browR:{angle:-0.38,oy: 0.1, vis:true,  thick:1},
+    mouthType:'frown', pupils:true, extras:'tears',
+  },
+  angry: {
+    eyeL:{sx:1,sy:0.6, angryL:true}, eyeR:{sx:1,sy:0.6, angryR:true},
+    browL:{angle: 0.45,oy:-0.05,vis:true,  thick:1.6},
+    browR:{angle:-0.45,oy:-0.05,vis:true,  thick:1.6},
+    mouthType:'scowl', pupils:true, extras:'steam',
+  },
+  surprised: {
+    eyeL:{sx:1.18,sy:1.22}, eyeR:{sx:1.18,sy:1.22},
+    browL:{angle:0,    oy:-0.5, vis:true,  thick:1},
+    browR:{angle:0,    oy:-0.5, vis:true,  thick:1},
+    mouthType:'ohh', pupils:true, extras:null,
+  },
+  sleeping: {
+    eyeL:{sx:1,sy:0.12}, eyeR:{sx:1,sy:0.12},
+    browL:{angle:0,    oy:0,   vis:false, thick:1},
+    browR:{angle:0,    oy:0,   vis:false, thick:1},
+    mouthType:'sleep', pupils:false, extras:'zzz',
+  },
+  afraid: {
+    eyeL:{sx:1.15,sy:1.25,afraid:true}, eyeR:{sx:1.15,sy:1.25,afraid:true},
+    browL:{angle:-0.28,oy:-0.38,vis:true, thick:1},
+    browR:{angle: 0.28,oy:-0.38,vis:true, thick:1},
+    mouthType:'tremble', pupils:true, extras:'sweat',
+  },
+  skeptical: {
+    eyeL:{sx:1,sy:0.55}, eyeR:{sx:1,sy:1},
+    browL:{angle:-0.22,oy:-0.08,vis:true, thick:1},
+    browR:{angle: 0.12,oy: 0.1, vis:true, thick:1},
+    mouthType:'smirk', pupils:true, extras:null,
+  },
+  celebrating: {
+    eyeL:{sx:1,sy:1,happy:true}, eyeR:{sx:1,sy:1,happy:true},
+    browL:{angle:-0.28,oy:-0.22,vis:true, thick:1},
+    browR:{angle: 0.28,oy:-0.22,vis:true, thick:1},
+    mouthType:'bigsmile', pupils:false, extras:'confetti',
+  },
+  disgusted: {
+    eyeL:{sx:1,sy:0.55}, eyeR:{sx:1,sy:0.7},
+    browL:{angle: 0.15,oy:-0.05,vis:true, thick:1.4},
+    browR:{angle:-0.3, oy:-0.12,vis:true, thick:1.4},
+    mouthType:'eww', pupils:true, extras:null,
+  },
+  love: {
+    eyeL:{sx:1,sy:1,heart:true}, eyeR:{sx:1,sy:1,heart:true},
+    browL:{angle:-0.2, oy:-0.18,vis:true, thick:1},
+    browR:{angle: 0.2, oy:-0.18,vis:true, thick:1},
+    mouthType:'smile', pupils:false, extras:'hearts',
+  },
+  crying: {
+    eyeL:{sx:1,sy:0.9,sad:true}, eyeR:{sx:1,sy:0.9,sad:true},
+    browL:{angle: 0.42,oy: 0.12,vis:true, thick:1},
+    browR:{angle:-0.42,oy: 0.12,vis:true, thick:1},
+    mouthType:'cryopen', pupils:true, extras:'bigcry',
+  },
+};
+
+function lerp(a,b,t){return a+(b-a)*t;}
+function easeBounce(t){
+  const c4=(2*Math.PI)/3;
+  if(t===0)return 0;if(t===1)return 1;
+  return Math.pow(2,-10*t)*Math.sin((t*10-0.75)*c4)+1;
+}
+function easeOut(t){return 1-(1-t)*(1-t);}
+
+function setMood(m){
+  if(!M[m])return;
+  currentMood=targetMood; targetMood=m; animT=0; squishT=0;
+  document.querySelectorAll('.mood-btn').forEach(b=>b.classList.toggle('active',b.dataset.mood===m));
+  if(m==='celebrating') spawnConfetti();
+  if(m==='sad'||m==='crying') spawnTears();
+}
+
+function spawnConfetti(){
+  particles=[];
+  for(let i=0;i<32;i++){
+    const g=geo();
+    particles.push({
+      type:'confetti',
+      x:g.cx+(Math.random()-0.5)*g.eyeR*6,
+      y:g.eyeY-g.eyeR*1.5,
+      vx:(Math.random()-0.5)*5,vy:-(2+Math.random()*5),
+      color:[AQUA,FG,YELLOW,PINK][Math.floor(Math.random()*4)],
+      r:3+Math.random()*5, life:1,decay:0.01+Math.random()*0.01,
+      rot:Math.random()*Math.PI*2,rspeed:(Math.random()-0.5)*0.2,
+    });
+  }
+}
+
+function spawnTears(){
+  tearDrops=[];
+  const g=geo();
+  for(let side=0;side<2;side++){
+    tearDrops.push({
+      x:(side===0?g.cx-g.gap-g.eyeR*0.1:g.cx+g.gap+g.eyeR*0.1),
+      y:g.eyeY+g.eyeR*0.6,
+      vy:0, life:1, size:g.eyeR*0.22, delay:side*0.3+Math.random()*0.2,
+    });
+  }
+}
+
+function doBlink(){
+  if(blinkT>=0||targetMood==='sleeping'){scheduleBlink();return;}
+  blinkT=0; scheduleBlink();
+}
+function scheduleBlink(){
+  clearTimeout(blinkTimer);
+  blinkTimer=setTimeout(doBlink,1800+Math.random()*2800);
+}
+document.addEventListener('mousemove',e=>{
+  const cx=window.innerWidth/2,cy=window.innerHeight/2;
+  tlx=Math.max(-1,Math.min(1,(e.clientX-cx)/(window.innerWidth*0.35)));
+  tly=Math.max(-1,Math.min(1,(e.clientY-cy)/(window.innerHeight*0.35)));
+});
+function scheduleRandomLook(){
+  clearTimeout(lookTimer);
+  lookTimer=setTimeout(()=>{
+    tlx=(Math.random()-0.5)*1.6; tly=(Math.random()-0.5)*1.0;
+    scheduleRandomLook();
+  },1200+Math.random()*3000);
+}
+
+// ─── Draw eye ─────────────────────────────────────────────────
+function drawEye(x,y,r,mood,blinkFrac,lx,ly){
+  const {sx,sy}=mood;
+  const aSY=sy*(1-blinkFrac);
+
+  // Heart eye
+  if(mood.heart){
+    ctx.save();
+    ctx.translate(x,y);
+    ctx.scale(sx,Math.max(0.01,aSY));
+    ctx.beginPath();
+    const hs=r*0.62;
+    // heart path
+    ctx.moveTo(0,hs*0.3);
+    ctx.bezierCurveTo(hs,-hs*0.5, hs*2.2,hs*0.8, 0,hs*2);
+    ctx.bezierCurveTo(-hs*2.2,hs*0.8,-hs,-hs*0.5,0,hs*0.3);
+    ctx.fillStyle=RED;
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  if(mood.happy){
+    ctx.save();ctx.translate(x,y);ctx.scale(sx,Math.max(0.01,aSY));
+    ctx.beginPath();
+    ctx.arc(0,0,r,Math.PI,0,false);ctx.closePath();
+    ctx.fillStyle=FG;ctx.fill();
+    ctx.restore();return;
+  }
+  if(mood.sad){
+    ctx.save();ctx.translate(x,y);ctx.scale(sx,Math.max(0.01,aSY));
+    ctx.beginPath();
+    ctx.arc(0,r*0.25,r*0.85,Math.PI,0,true);ctx.closePath();
+    ctx.fillStyle=FG;ctx.fill();
+    ctx.restore();return;
+  }
+  if(mood.afraid){
+    // Wide-open with inner ring effect
+    ctx.save();ctx.translate(x,y);ctx.scale(sx,Math.max(0.01,aSY));
+    ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.fillStyle=FG;ctx.fill();
+    ctx.beginPath();ctx.arc(0,0,r*0.78,0,Math.PI*2);ctx.fillStyle=AQUA;ctx.fill();
+    ctx.beginPath();ctx.arc(0,0,r*0.5,0,Math.PI*2);ctx.fillStyle=BG;ctx.fill();
+    ctx.beginPath();ctx.arc(-r*0.15,-r*0.15,r*0.18,0,Math.PI*2);ctx.fillStyle=FG;ctx.fill();
+    ctx.restore();return;
+  }
+
+  ctx.save();ctx.translate(x,y);ctx.scale(sx,Math.max(0.01,aSY));
+  ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.fillStyle=FG;ctx.fill();
+
+  if(blinkFrac<0.8){
+    const maxP=r*0.44, px=lx*r*0.36, py=ly*r*0.3;
+    ctx.beginPath();ctx.arc(px,py,maxP,0,Math.PI*2);ctx.fillStyle=BG;ctx.fill();
+    ctx.beginPath();ctx.arc(px-maxP*0.28,py-maxP*0.28,maxP*0.26,0,Math.PI*2);ctx.fillStyle=FG;ctx.fill();
+    // second small glint
+    ctx.beginPath();ctx.arc(px+maxP*0.22,py-maxP*0.35,maxP*0.12,0,Math.PI*2);ctx.fillStyle=FG;ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ─── Draw brow ────────────────────────────────────────────────
+function drawBrow(x,y,r,angle,oy,vis,browH,thick){
+  if(!vis)return;
+  const len=r*1.08;
+  const baseY=r*1.15;
+  const shiftY=oy*r;
+  ctx.save();
+  ctx.translate(x,y-baseY+shiftY);
+  ctx.rotate(angle);
+  ctx.beginPath();ctx.moveTo(-len,0);ctx.lineTo(len,0);
+  ctx.strokeStyle=FG;ctx.lineWidth=browH*(thick||1);ctx.lineCap='round';ctx.stroke();
+  ctx.restore();
+}
+
+// ─── Draw mouth ───────────────────────────────────────────────
+function drawMouth(cx,mouthY,r,type,t){
+  const w=r*1.1, h=r*0.45;
+  ctx.save();
+  ctx.strokeStyle=FG;ctx.fillStyle=FG;ctx.lineCap='round';ctx.lineJoin='round';
+
+  switch(type){
+    case 'flat':
+      ctx.lineWidth=r*0.18;
+      ctx.beginPath();ctx.moveTo(cx-w*0.5,mouthY);ctx.lineTo(cx+w*0.5,mouthY);ctx.stroke();
+      break;
+    case 'smile':
+      ctx.lineWidth=r*0.19;
+      ctx.beginPath();ctx.arc(cx,mouthY-h*0.6,w*0.55,0.3,Math.PI-0.3);ctx.stroke();
+      break;
+    case 'bigsmile':
+      // filled open smile
+      ctx.lineWidth=r*0.17;
+      ctx.beginPath();
+      ctx.arc(cx,mouthY-h*0.5,w*0.65,0.2,Math.PI-0.2);
+      ctx.stroke();
+      // teeth
+      ctx.save();ctx.globalAlpha=0.8;
+      ctx.fillStyle=FG;
+      ctx.beginPath();
+      ctx.ellipse(cx,mouthY-h*0.1,w*0.45,h*0.4,0,0,Math.PI);
+      ctx.fill();
+      ctx.restore();
+      break;
+    case 'frown':
+      ctx.lineWidth=r*0.18;
+      ctx.beginPath();ctx.arc(cx,mouthY+h*0.6,w*0.55,Math.PI+0.3,-0.3);ctx.stroke();
+      break;
+    case 'scowl':
+      ctx.lineWidth=r*0.22;
+      ctx.beginPath();ctx.arc(cx,mouthY+h*0.8,w*0.5,Math.PI+0.4,-0.4);ctx.stroke();
+      break;
+    case 'ohh':
+      ctx.beginPath();ctx.ellipse(cx,mouthY,r*0.32,r*0.42,0,0,Math.PI*2);ctx.fill();
+      break;
+    case 'sleep':
+      ctx.lineWidth=r*0.15;ctx.globalAlpha=0.5;
+      ctx.beginPath();ctx.arc(cx,mouthY-h*0.2,w*0.35,0.4,Math.PI-0.4);ctx.stroke();
+      break;
+    case 'tremble': {
+      ctx.lineWidth=r*0.18;
+      const wobble=Math.sin(t*18)*r*0.05;
+      ctx.beginPath();
+      ctx.moveTo(cx-w*0.5,mouthY+wobble);
+      ctx.bezierCurveTo(cx-w*0.15,mouthY-wobble,cx+w*0.15,mouthY+wobble,cx+w*0.5,mouthY-wobble);
+      ctx.stroke();
+      break;
+    }
+    case 'smirk':
+      ctx.lineWidth=r*0.17;
+      ctx.beginPath();ctx.moveTo(cx-w*0.4,mouthY+r*0.05);
+      ctx.bezierCurveTo(cx-w*0.1,mouthY+r*0.05,cx+w*0.2,mouthY-r*0.2,cx+w*0.45,mouthY-r*0.28);
+      ctx.stroke();
+      break;
+    case 'eww':
+      ctx.lineWidth=r*0.18;
+      ctx.beginPath();
+      ctx.moveTo(cx-w*0.4,mouthY-r*0.05);
+      ctx.bezierCurveTo(cx-w*0.1,mouthY+r*0.18,cx+w*0.05,mouthY+r*0.22,cx+w*0.2,mouthY+r*0.08);
+      ctx.bezierCurveTo(cx+w*0.35,mouthY-r*0.1,cx+w*0.4,mouthY-r*0.1,cx+w*0.42,mouthY-r*0.05);
+      ctx.stroke();
+      break;
+    case 'cryopen':
+      ctx.lineWidth=r*0.17;
+      ctx.beginPath();ctx.arc(cx,mouthY+h*0.5,w*0.5,Math.PI+0.15,-0.15);ctx.stroke();
+      // open mouth fill
+      ctx.fillStyle=BG;ctx.globalAlpha=0.6;
+      ctx.beginPath();ctx.ellipse(cx,mouthY+h*0.6,w*0.38,h*0.38,0,0,Math.PI);ctx.fill();
+      break;
+  }
+  ctx.restore();
+}
+
+// ─── Extras ───────────────────────────────────────────────────
+let zzzT=0;
+function drawZzz(eyeRX,eyeY,r,t){
+  const sizes=[r*0.52,r*0.4,r*0.3];
+  const offs=[{x:r*1.7,y:-r*0.4},{x:r*2.3,y:-r*1.1},{x:r*2.75,y:-r*1.7}];
+  for(let i=0;i<3;i++){
+    const phase=(t*0.75+i*0.33)%1;
+    const alpha=Math.sin(phase*Math.PI);
+    ctx.save();ctx.globalAlpha=alpha*0.9;
+    ctx.font=`bold ${sizes[i]*2.1}px Helvetica Neue,Arial`;
+    ctx.fillStyle=FG;ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText('z',eyeRX+offs[i].x,eyeY+offs[i].y);
+    ctx.restore();
+  }
+}
+
+function drawSweat(x,y,r,t){
+  const bob=Math.sin(t*4)*3;
+  ctx.save();ctx.translate(x+r*1.35,y-r*0.15+bob);
+  ctx.beginPath();
+  ctx.moveTo(0,-r*0.55);
+  ctx.bezierCurveTo(r*0.32,-r*0.08,r*0.32,r*0.42,0,r*0.55);
+  ctx.bezierCurveTo(-r*0.32,r*0.42,-r*0.32,-r*0.08,0,-r*0.55);
+  ctx.fillStyle=AQUA;ctx.globalAlpha=0.92;ctx.fill();ctx.restore();
+}
+
+function drawSteam(x,y,r,t){
+  for(let i=0;i<2;i++){
+    const ox=(i===0?-r*0.5:r*0.5);
+    const phase=(t*1.2+i*0.5)%1;
+    const sy=y-r*1.1-phase*r*1.2;
+    const alpha=Math.sin(phase*Math.PI)*0.7;
+    ctx.save();ctx.globalAlpha=alpha;
+    ctx.strokeStyle=FG;ctx.lineWidth=r*0.15;ctx.lineCap='round';
+    ctx.beginPath();
+    ctx.moveTo(x+ox,sy+r*0.5);
+    ctx.bezierCurveTo(x+ox+r*0.3,sy+r*0.2,x+ox-r*0.3,sy,x+ox,sy-r*0.3);
+    ctx.stroke();ctx.restore();
+  }
+}
+
+function drawHearts(cx,eyeY,r,t){
+  const baseHearts=[{ox:-r*2.5,oy:-r*1.6,phase:0},{ox:r*2.5,oy:-r*1.8,phase:0.5},{ox:0,oy:-r*2.6,phase:0.25}];
+  for(const h of baseHearts){
+    const phase=(t*0.6+h.phase)%1;
+    const alpha=Math.sin(phase*Math.PI)*0.9;
+    const scale=0.5+phase*0.8;
+    ctx.save();
+    ctx.globalAlpha=alpha;
+    ctx.translate(cx+h.ox,eyeY+h.oy-phase*r*1.5);
+    ctx.scale(scale,scale);
+    const hs=r*0.5;
+    ctx.beginPath();
+    ctx.moveTo(0,hs*0.3);
+    ctx.bezierCurveTo(hs,-hs*0.5,hs*2.2,hs*0.8,0,hs*2);
+    ctx.bezierCurveTo(-hs*2.2,hs*0.8,-hs,-hs*0.5,0,hs*0.3);
+    ctx.fillStyle=RED;ctx.fill();ctx.restore();
+  }
+}
+
+let tearT=0;
+function drawBigCry(eyeLX,eyeRX,eyeY,r,t){
+  const streams=[{x:eyeLX-r*0.3},{x:eyeLX+r*0.2},{x:eyeRX-r*0.2},{x:eyeRX+r*0.3}];
+  for(let i=0;i<streams.length;i++){
+    const phase=(t*1.5+i*0.25)%1;
+    const startY=eyeY+r;
+    const endY=eyeY+r+r*4*phase;
+    const alpha=Math.min(1,(1-phase)*2);
+    ctx.save();ctx.globalAlpha=alpha;
+    ctx.strokeStyle=AQUA;ctx.lineWidth=r*0.2;ctx.lineCap='round';
+    ctx.beginPath();ctx.moveTo(streams[i].x,startY);ctx.lineTo(streams[i].x,endY);ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ─── Main draw ────────────────────────────────────────────────
+let lastTs=0;
+
+function draw(ts){
+  requestAnimationFrame(draw);
+  const dt=Math.min((ts-lastTs)/1000,0.05);
+  lastTs=ts;
+
+  const W=canvas.width;
+  ctx.clearRect(0,0,W,W);
+  const g=geo();
+  const {eyeR,browH}=g;
+
+  lookX+=(tlx-lookX)*0.1; lookY+=(tly-lookY)*0.1;
+  if(animT<1) animT=Math.min(1,animT+dt/animDur);
+  const te=easeBounce(animT);
+
+  const fromM=M[currentMood], toM=M[targetMood];
+
+  function lerpEye(a,b){return{
+    sx:lerp(a.sx,b.sx,te),sy:lerp(a.sy,b.sy,te),
+    happy:te>0.5?b.happy:a.happy, sad:te>0.5?b.sad:a.sad,
+    afraid:te>0.5?b.afraid:a.afraid, heart:te>0.5?b.heart:a.heart,
+    angryL:te>0.5?b.angryL:a.angryL, angryR:te>0.5?b.angryR:a.angryR,
+  };}
+  function lerpBrow(a,b){return{
+    angle:lerp(a.angle,b.angle,te), oy:lerp(a.oy,b.oy,te),
+    vis:te>0.5?b.vis:a.vis, thick:lerp(a.thick||1,b.thick||1,te),
+  };}
+
+  const eyeLS=lerpEye(fromM.eyeL,toM.eyeL);
+  const eyeRS=lerpEye(fromM.eyeR,toM.eyeR);
+  const browLS=lerpBrow(fromM.browL,toM.browL);
+  const browRS=lerpBrow(fromM.browR,toM.browR);
+  const mouthType=te>0.5?toM.mouthType:fromM.mouthType;
+
+  if(blinkT>=0){blinkT+=dt*7;if(blinkT>1)blinkT=-1;}
+  const blinkFrac=blinkT>=0?Math.max(0,Math.sin(blinkT*Math.PI)):0;
+
+  const eyeLX=g.cx-g.gap-eyeR*0.08;
+  const eyeRX=g.cx+g.gap+eyeR*0.08;
+  const eyeY=g.eyeY;
+  const mouthY=eyeY+eyeR*1.9;
+
+  squishT=Math.min(squishT+dt*3,1);
+  const sq=1+0.14*Math.sin(squishT*Math.PI)*(1-squishT);
+
+  // Squish transform — eyes AND brows inside
+  ctx.save();
+  ctx.translate(g.cx,eyeY);ctx.scale(sq,2-sq);ctx.translate(-g.cx,-eyeY);
+
+  drawEye(eyeLX,eyeY,eyeR,eyeLS,blinkFrac,lookX,lookY);
+  drawBrow(eyeLX,eyeY,eyeR,browLS.angle,browLS.oy,browLS.vis,browH,browLS.thick);
+  drawEye(eyeRX,eyeY,eyeR,eyeRS,blinkFrac,lookX,lookY);
+  drawBrow(eyeRX,eyeY,eyeR,browRS.angle,browRS.oy,browRS.vis,browH,browRS.thick);
+
+  // Mouth inside squish too
+  drawMouth(g.cx,mouthY,eyeR,mouthType,ts/1000);
+
+  // Blush cheeks for love/happy
+  if(targetMood==='love'||(targetMood==='happy'&&animT>0.5)){
+    const blushAlpha=(targetMood==='love'?0.35:0.18)*Math.min(1,animT*2);
+    ctx.save();ctx.globalAlpha=blushAlpha;
+    ctx.fillStyle=PINK;
+    ctx.beginPath();ctx.ellipse(eyeLX-eyeR*1.05,eyeY+eyeR*0.7,eyeR*0.75,eyeR*0.38,0,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.ellipse(eyeRX+eyeR*1.05,eyeY+eyeR*0.7,eyeR*0.75,eyeR*0.38,0,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+  }
+
+  ctx.restore();
+
+  // Extras (outside squish)
+  const extras=toM.extras;
+  if(extras==='zzz'){zzzT+=dt;drawZzz(eyeRX,eyeY,eyeR,zzzT);}
+  if(extras==='sweat') drawSweat(eyeRX,eyeY,eyeR,ts/1000);
+  if(extras==='steam'){drawSteam(eyeLX,eyeY,eyeR,ts/1000);drawSteam(eyeRX,eyeY,eyeR,ts/1000+0.3);}
+  if(extras==='hearts'){heartPulse+=dt;drawHearts(g.cx,eyeY,eyeR,heartPulse);}
+  if(extras==='tears'){tearT+=dt;drawBigCry(eyeLX,eyeRX,eyeY,eyeR,tearT);}
+  if(extras==='bigcry'){tearT+=dt;drawBigCry(eyeLX,eyeRX,eyeY,eyeR,tearT*1.5);}
+
+  if(extras==='confetti'||particles.length>0){
+    for(let i=particles.length-1;i>=0;i--){
+      const p=particles[i];
+      p.x+=p.vx;p.y+=p.vy;p.vy+=0.16;p.life-=p.decay;p.rot+=p.rspeed;
+      if(p.life<=0){particles.splice(i,1);continue;}
+      ctx.save();ctx.globalAlpha=p.life;ctx.translate(p.x,p.y);ctx.rotate(p.rot);
+      ctx.fillStyle=p.color;ctx.fillRect(-p.r/2,-p.r/2,p.r,p.r);ctx.restore();
+    }
+  }
+}
+
+setMood('neutral');
+scheduleBlink();
+scheduleRandomLook();
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

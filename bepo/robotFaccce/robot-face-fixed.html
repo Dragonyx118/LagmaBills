@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Robot Face – Fixed</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #1a56db;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    overflow: hidden;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+  }
+
+  canvas#face { display: block; }
+
+  .controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-top: 32px;
+    max-width: 560px;
+    padding: 0 16px;
+  }
+
+  .mood-btn {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 7px 16px;
+    border: 2px solid rgba(255,255,255,0.35);
+    background: transparent;
+    color: rgba(255,255,255,0.6);
+    border-radius: 99px;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-transform: uppercase;
+  }
+  .mood-btn:hover  { border-color: #fff; color: #fff; }
+  .mood-btn.active { background: #fff; color: #1a56db; border-color: #fff; }
+  .mood-btn:active { transform: scale(0.95); }
+</style>
+</head>
+<body>
+
+<canvas id="face"></canvas>
+
+<div class="controls">
+  <button class="mood-btn active" data-mood="neutral"     onclick="setMood('neutral')">Neutral</button>
+  <button class="mood-btn"        data-mood="happy"       onclick="setMood('happy')">Happy</button>
+  <button class="mood-btn"        data-mood="sad"         onclick="setMood('sad')">Sad</button>
+  <button class="mood-btn"        data-mood="angry"       onclick="setMood('angry')">Angry</button>
+  <button class="mood-btn"        data-mood="surprised"   onclick="setMood('surprised')">Surprised</button>
+  <button class="mood-btn"        data-mood="sleeping"    onclick="setMood('sleeping')">Sleeping</button>
+  <button class="mood-btn"        data-mood="afraid"      onclick="setMood('afraid')">Afraid</button>
+  <button class="mood-btn"        data-mood="skeptical"   onclick="setMood('skeptical')">Sceptical</button>
+  <button class="mood-btn"        data-mood="celebrating" onclick="setMood('celebrating')">Celebrating</button>
+</div>
+
+<script>
+const canvas = document.getElementById('face');
+const ctx    = canvas.getContext('2d');
+
+function resize() {
+  const s = Math.min(window.innerWidth * 0.85, window.innerHeight * 0.6, 500);
+  canvas.width  = s;
+  canvas.height = s;
+}
+resize();
+window.addEventListener('resize', resize);
+
+const BG   = '#1a56db';
+const FG   = '#ffffff';
+const AQUA = '#2dd4bf';
+
+function geo() {
+  const W = canvas.width;
+  const cx = W / 2;
+  const cy = W / 2;
+  const gap    = W * 0.18;
+  const eyeR   = W * 0.13;
+  const eyeY   = cy + W * 0.02;
+  const browH  = W * 0.055;
+  // FIX: browOff is the BASE vertical distance from eye center to brow center
+  // We keep this as a fixed proportion and let oy shift relative to it
+  const browOff = eyeR * 1.1; // distance above eye center (was 0.55 — too close)
+  return { cx, cy, gap, eyeR, eyeY, browH, browOff, W };
+}
+
+let currentMood  = 'neutral';
+let targetMood   = 'neutral';
+let animT        = 1.0;
+let animDuration = 0.45;
+
+let lookX = 0, lookY = 0, tlx = 0, tly = 0;
+let lookTimer = null;
+
+let blinkT    = -1;
+let blinkTimer = null;
+
+let particles = [];
+let talking   = false;
+let talkPh    = 0;
+let squishT   = 0;
+
+const M = {
+  neutral: {
+    eyeL: { sx:1,    sy:1    },
+    eyeR: { sx:1,    sy:1    },
+    browL: { angle:  0,     oy:  0, vis: true  },
+    browR: { angle:  0,     oy:  0, vis: true  },
+    pupils: true,
+    extras: null,
+  },
+  happy: {
+    eyeL: { sx:1,    sy:1,   happy: true },
+    eyeR: { sx:1,    sy:1,   happy: true },
+    browL: { angle: -0.25,   oy: -0.15, vis: true  },
+    browR: { angle:  0.25,   oy: -0.15, vis: true  },
+    pupils: false,
+    extras: null,
+  },
+  sad: {
+    eyeL: { sx:1,    sy:1,   sad: true },
+    eyeR: { sx:1,    sy:1,   sad: true },
+    browL: { angle:  0.35,   oy:  0.15, vis: true  },
+    browR: { angle: -0.35,   oy:  0.15, vis: true  },
+    pupils: true,
+    extras: null,
+  },
+  angry: {
+    eyeL: { sx:1,    sy:0.7  },
+    eyeR: { sx:1,    sy:0.7  },
+    browL: { angle:  0.4,    oy: -0.1, vis: true  },
+    browR: { angle: -0.4,    oy: -0.1, vis: true  },
+    pupils: true,
+    extras: null,
+  },
+  surprised: {
+    eyeL: { sx:1.15, sy:1.15 },
+    eyeR: { sx:1.15, sy:1.15 },
+    browL: { angle:  0,      oy: -0.45, vis: true  },
+    browR: { angle:  0,      oy: -0.45, vis: true  },
+    pupils: true,
+    extras: null,
+  },
+  sleeping: {
+    eyeL: { sx:1,    sy:0.18 },
+    eyeR: { sx:1,    sy:0.18 },
+    browL: { angle:  0,      oy:  0, vis: false },
+    browR: { angle:  0,      oy:  0, vis: false },
+    pupils: false,
+    extras: 'zzz',
+  },
+  afraid: {
+    eyeL: { sx:1.2,  sy:1.2  },
+    eyeR: { sx:1.2,  sy:1.2  },
+    browL: { angle: -0.3,    oy: -0.35, vis: true  },
+    browR: { angle:  0.3,    oy: -0.35, vis: true  },
+    pupils: true,
+    extras: 'sweat',
+  },
+  skeptical: {
+    eyeL: { sx:1,    sy:0.65 },
+    eyeR: { sx:1,    sy:1    },
+    browL: { angle: -0.2,    oy: -0.1, vis: true  },
+    browR: { angle:  0.1,    oy:  0.1, vis: true  },
+    pupils: true,
+    extras: null,
+  },
+  celebrating: {
+    eyeL: { sx:1,    sy:1,   happy:true },
+    eyeR: { sx:1,    sy:1,   happy:true },
+    browL: { angle: -0.3,    oy: -0.25, vis: true  },
+    browR: { angle:  0.3,    oy: -0.25, vis: true  },
+    pupils: false,
+    extras: 'confetti',
+  },
+};
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+function easeInOut(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+function easeBounce(t) {
+  const c4 = (2*Math.PI)/3;
+  if (t===0) return 0;
+  if (t===1) return 1;
+  return Math.pow(2,-10*t)*Math.sin((t*10-0.75)*c4)+1;
+}
+
+function setMood(m) {
+  if (!M[m]) return;
+  currentMood = targetMood;
+  targetMood  = m;
+  animT = 0;
+  squishT = 0;
+  document.querySelectorAll('.mood-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.mood === m));
+  if (m === 'celebrating') spawnConfetti();
+}
+
+function spawnConfetti() {
+  particles = [];
+  for (let i = 0; i < 22; i++) {
+    const g = geo();
+    particles.push({
+      x: g.cx + (Math.random()-0.5)*g.eyeR*5,
+      y: g.eyeY - g.eyeR*1.5,
+      vx: (Math.random()-0.5)*4,
+      vy: -(2 + Math.random()*4),
+      color: Math.random()>0.5 ? AQUA : '#fff',
+      r: 3 + Math.random()*5,
+      life: 1,
+      decay: 0.012 + Math.random()*0.01,
+      rot: Math.random()*Math.PI*2,
+      rspeed: (Math.random()-0.5)*0.2,
+    });
+  }
+}
+
+function doBlink() {
+  if (blinkT >= 0 || targetMood === 'sleeping') { scheduleBlink(); return; }
+  blinkT = 0;
+  scheduleBlink();
+}
+function scheduleBlink() {
+  clearTimeout(blinkTimer);
+  blinkTimer = setTimeout(doBlink, 1800 + Math.random()*2800);
+}
+
+document.addEventListener('mousemove', e => {
+  const cx = window.innerWidth/2, cy = window.innerHeight/2;
+  tlx = Math.max(-1, Math.min(1, (e.clientX-cx)/(window.innerWidth*0.35)));
+  tly = Math.max(-1, Math.min(1, (e.clientY-cy)/(window.innerHeight*0.35)));
+});
+function scheduleRandomLook() {
+  clearTimeout(lookTimer);
+  lookTimer = setTimeout(()=>{
+    tlx = (Math.random()-0.5)*1.6;
+    tly = (Math.random()-0.5)*1.0;
+    scheduleRandomLook();
+  }, 1200 + Math.random()*3000);
+}
+
+// FIX: drawEye doesn't use ctx.save/restore multiple times or break context;
+// all shapes stay within a single save/restore block using clipping.
+function drawEye(x, y, r, mood, blinkFrac) {
+  const { sx, sy } = mood;
+  const actualSY = sy * (1 - blinkFrac);
+
+  if (mood.happy) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(sx, Math.max(0.01, actualSY));
+    ctx.beginPath();
+    ctx.arc(0, 0, r, Math.PI, 0, false);
+    ctx.closePath();
+    ctx.fillStyle = FG;
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  if (mood.sad) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(sx, Math.max(0.01, actualSY));
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI, false);
+    ctx.closePath();
+    ctx.fillStyle = FG;
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(sx, Math.max(0.01, actualSY));
+
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI*2);
+  ctx.fillStyle = FG;
+  ctx.fill();
+
+  if (blinkFrac < 0.8) {
+    const maxPup = r * 0.42;
+    const px = lookX * r * 0.35;
+    const py = lookY * r * 0.3;
+    ctx.beginPath();
+    ctx.arc(px, py, maxPup, 0, Math.PI*2);
+    ctx.fillStyle = BG;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(px - maxPup*0.3, py - maxPup*0.3, maxPup*0.28, 0, Math.PI*2);
+    ctx.fillStyle = FG;
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// FIX: brow position uses eyeR-relative oy (fraction of eyeR),
+// so it scales properly and never overlaps the eye.
+// browOff = distance above eye center; oy = fraction of eyeR shift
+function drawBrow(x, y, r, angle, oy, vis, browH) {
+  if (!vis) return;
+  const len = r * 1.05;
+  // base distance above eye center: 1.1*r gives comfortable clearance
+  // oy is now a fraction of r (e.g. -0.45 = move 0.45*r higher)
+  const baseY = r * 1.1;
+  const shiftY = oy * r;
+  ctx.save();
+  ctx.translate(x, y - baseY + shiftY);
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.moveTo(-len, 0);
+  ctx.lineTo( len, 0);
+  ctx.strokeStyle = FG;
+  ctx.lineWidth = browH;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawZzz(cx, cy, r, t) {
+  const sizes   = [r*0.55, r*0.42, r*0.3];
+  const offsets = [
+    { x: r*1.6,  y: -r*0.5 },
+    { x: r*2.15, y: -r*1.1 },
+    { x: r*2.6,  y: -r*1.6 },
+  ];
+  for (let i = 0; i < 3; i++) {
+    const phase = (t*0.8 + i*0.33) % 1;
+    const alpha = Math.sin(phase * Math.PI);
+    ctx.save();
+    ctx.globalAlpha = alpha * 0.85;
+    ctx.font = `bold ${sizes[i]*2}px Helvetica Neue, Arial`;
+    ctx.fillStyle = FG;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('z', cx + offsets[i].x, cy + offsets[i].y);
+    ctx.restore();
+  }
+}
+
+function drawSweat(x, y, r, t) {
+  const bob = Math.sin(t*4) * 3;
+  ctx.save();
+  ctx.translate(x + r*1.2, y - r*0.2 + bob);
+  ctx.beginPath();
+  ctx.moveTo(0, -r*0.5);
+  ctx.bezierCurveTo( r*0.3, -r*0.1,  r*0.3,  r*0.4, 0,  r*0.5);
+  ctx.bezierCurveTo(-r*0.3,  r*0.4, -r*0.3, -r*0.1, 0, -r*0.5);
+  ctx.fillStyle = AQUA;
+  ctx.globalAlpha = 0.9;
+  ctx.fill();
+  ctx.restore();
+}
+
+let zzzT  = 0;
+let lastTs = 0;
+
+function draw(ts) {
+  requestAnimationFrame(draw);
+  const dt = Math.min((ts - lastTs)/1000, 0.05);
+  lastTs = ts;
+
+  const W = canvas.width;
+  ctx.clearRect(0, 0, W, W);
+
+  const g     = geo();
+  const eyeR  = g.eyeR;
+  const browH = g.browH;
+
+  lookX += (tlx - lookX) * 0.1;
+  lookY += (tly - lookY) * 0.1;
+
+  if (animT < 1) animT = Math.min(1, animT + dt / animDuration);
+  const te = easeBounce(animT);
+
+  const fromM = M[currentMood];
+  const toM   = M[targetMood];
+
+  function lerpEye(a, b) {
+    return {
+      sx:    lerp(a.sx,    b.sx,    te),
+      sy:    lerp(a.sy,    b.sy,    te),
+      happy: te > 0.5 ? b.happy : a.happy,
+      sad:   te > 0.5 ? b.sad   : a.sad,
+    };
+  }
+  function lerpBrow(a, b) {
+    return {
+      angle: lerp(a.angle, b.angle, te),
+      oy:    lerp(a.oy,    b.oy,    te),
+      vis:   te > 0.5 ? b.vis : a.vis,
+    };
+  }
+
+  const eyeLS  = lerpEye( fromM.eyeL, toM.eyeL );
+  const eyeRS  = lerpEye( fromM.eyeR, toM.eyeR );
+  const browLS = lerpBrow(fromM.browL, toM.browL);
+  const browRS = lerpBrow(fromM.browR, toM.browR);
+
+  if (blinkT >= 0) {
+    blinkT += dt * 7;
+    if (blinkT > 1) blinkT = -1;
+  }
+  const blinkFrac = blinkT >= 0 ? Math.max(0, Math.sin(blinkT * Math.PI)) : 0;
+
+  const eyeLX = g.cx - g.gap - eyeR * 0.1;
+  const eyeRX = g.cx + g.gap + eyeR * 0.1;
+  const eyeY  = g.eyeY;
+
+  squishT = Math.min(squishT + dt*3, 1);
+  const squishScale = 1 + 0.12 * Math.sin(squishT * Math.PI) * (1 - squishT);
+
+  // FIX: include BOTH eyes and brows inside the squish transform
+  ctx.save();
+  ctx.translate(g.cx, eyeY);
+  ctx.scale(squishScale, 2 - squishScale);
+  ctx.translate(-g.cx, -eyeY);
+
+  drawEye(eyeLX, eyeY, eyeR, eyeLS, blinkFrac);
+  drawBrow(eyeLX, eyeY, eyeR, browLS.angle, browLS.oy, browLS.vis, browH);
+
+  drawEye(eyeRX, eyeY, eyeR, eyeRS, blinkFrac);
+  drawBrow(eyeRX, eyeY, eyeR, browRS.angle, browRS.oy, browRS.vis, browH);
+
+  ctx.restore();
+
+  // Extras drawn outside squish (decorative, not part of face)
+  const extras = toM.extras;
+  if (extras === 'zzz') {
+    zzzT += dt;
+    drawZzz(eyeRX, eyeY, eyeR, zzzT);
+  }
+  if (extras === 'sweat') {
+    drawSweat(eyeRX, eyeY, eyeR, ts/1000);
+  }
+  if (extras === 'confetti' || particles.length > 0) {
+    for (let i = particles.length-1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx; p.y += p.vy; p.vy += 0.18;
+      p.life -= p.decay; p.rot += p.rspeed;
+      if (p.life <= 0) { particles.splice(i,1); continue; }
+      ctx.save();
+      ctx.globalAlpha = p.life;
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.r/2, -p.r/2, p.r, p.r);
+      ctx.restore();
+    }
+  }
+}
+
+setMood('neutral');
+scheduleBlink();
+scheduleRandomLook();
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
