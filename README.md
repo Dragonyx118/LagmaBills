@@ -151,4 +151,4 @@ ReSpeaker mic → wakeword.py (hey_no_va.onnx)
 
 ## Licenza
 
-MIT License — © 2025 Daniele Cerioli
+MIT License — © 2025 Dragonyx
