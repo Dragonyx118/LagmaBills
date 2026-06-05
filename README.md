@@ -63,7 +63,7 @@ Tutto comunica via **MQTT** (Mosquitto su RPi, `localhost:1883`, accessibile anc
 
 ```
                     ┌─────────────────────────┐
-                    │   Mosquitto Broker (RPi) │
+                    │  Mosquitto Broker (RPi) │
                     └────────────┬────────────┘
            ┌──────────┬──────────┼──────────┬──────────┐
            │          │          │          │          │
