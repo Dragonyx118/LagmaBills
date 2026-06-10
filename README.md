@@ -9,7 +9,7 @@
 ![App](https://img.shields.io/badge/app-.NET%20MAUI-512BD4?style=flat&logo=dotnet&logoColor=white)
 ![KiCad](https://img.shields.io/badge/PCB-KiCad-314CB0?style=flat&logo=kicad&logoColor=white)
 ![AI](https://img.shields.io/badge/AI-Whisper%20%2F%20ONNX-FF6F00?style=flat&logo=openai&logoColor=white)
-![License](https://img.shields.io/badge/license-MIT-green?style=flat)
+![License](https://img.shields.io/badge/license-Hippocratic%203.0-brightgreen?style=flat)
 
 > A Mecanum-wheeled robot for civil protection, powered by a Raspberry Pi orchestrating two custom ESP32 PCBs, sensors, a robotic arm, and a drone companion over MQTT. It navigates autonomously, maps its environment, avoids obstacles, and is controlled via voice AI, a MAUI app, or browser dashboard.
 
@@ -162,4 +162,4 @@ ReSpeaker mic → wakeword.py (hey_no_va.onnx)
 
 ## Licenza
 
-MIT License — © 2025 Dragonyx
+[Hippocratic License 3.0](https://firstdonoharm.dev/version/3/0/cl-eco-law-mil-sv.txt) (HL3-CL-ECO-LAW-MIL-SV) — © 2025 Dragonyx
