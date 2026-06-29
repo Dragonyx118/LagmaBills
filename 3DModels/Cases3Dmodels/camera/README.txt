@@ -1,0 +1,4 @@
+Raspberry Pi3 IR Camera Wide-angle waterproof housing by bujna94 on Thingiverse: https://www.thingiverse.com/thing:3542321
+
+Summary:
+Hi, I designed this housing for: MakerHawk Raspberry Pi3 Camera IR Fisheye Wide-angle 175 Degree 5MP OV5647. Link to Amazon - https://amzn.to/2G10jXEI was printing it with PETG 100% infill, but PLA or ABS will be fine too. (PLA is not recommended for outdoor use). Gaskets I print with TPU 100% infill again. My printer is Ender 3 &amp; layer height was 0.3mm.The reason why the camera lens is not covered with plexiglass is night vision. If I just cover the whole camera with plexiglass, IR lights will reflect and you will be not able to see almost anything.I used 4 M3x16mm stainless steel pan head screws.It's not probably waterproof enough if you try to swim with it (didn't try), but more than enough for rain.You can also use some silicone to seal cable.Acrylic sheet is thick 3mm.Enjoy

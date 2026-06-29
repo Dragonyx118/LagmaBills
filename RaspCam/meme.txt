@@ -1,0 +1,15 @@
+rpicam-still -o test.jpg
+fbi -T 1 -d /dev/fb0 -a test.jpg
+
+
+# Installa mjpg-streamer
+sudo apt install mjpg-streamer -y
+
+# Avvia lo stream
+mjpg_streamer -i "input_raspicam.so -r 640x480 -f 30" \
+              -o "output_http.so -p 8080"
+```
+
+Poi nell'app MAUI leggi semplicemente:
+```
+http://192.168.1.X:8080/stream
