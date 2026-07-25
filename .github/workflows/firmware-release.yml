@@ -1,0 +1,35 @@
+name: Aggiorna Release Firmware
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'firmware/**'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Crea zip firmware motori
+        run: |
+          cd firmware/firm_esp32_motori
+          zip -r ../../firm_esp32_motori.zip . -x ".pio/*" -x ".vscode/*"
+
+      - name: Crea zip firmware sensori
+        run: |
+          cd firmware/firm_esp32_sensori
+          zip -r ../../firm_esp32_sensori.zip . -x ".pio/*" -x ".vscode/*"
+
+      - name: Pubblica/aggiorna release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-firmware
+          name: "Firmware ESP32 (ultima versione)"
+          body: "Aggiornato automaticamente ad ogni push su main che modifica firmware/. Commit: ${{ github.sha }}"
+          files: |
+            firm_esp32_motori.zip
+            firm_esp32_sensori.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
