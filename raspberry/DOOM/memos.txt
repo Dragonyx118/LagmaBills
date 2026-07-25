@@ -1,0 +1,5 @@
+sudo apt install prboom-plus
+# registra:
+prboom-plus -iwad doom1.wad -record miademo
+# riproduci in loop:
+prboom-plus -iwad doom1.wad -playdemo miademo -loop
