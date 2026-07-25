@@ -1,0 +1,75 @@
+# config.yaml - Configurazione centralizzata pipeline wake word
+
+wake_word:
+  name: "nova"          # era "aria"
+  phonemes: "noʊvə"
+  similar_words: ["nova", "bova", "rova", "nuova", "lova"]  # per dataset negativo hard
+
+audio:
+  sample_rate: 16000          # Hz - standard openWakeWord
+  chunk_size: 1280            # 80ms @ 16kHz - bilanciamento latenza/CPU
+  channels: 1                 # mono
+  dtype: "int16"
+  bit_depth: 16
+
+dataset:
+  positive:
+    target_samples: 20000     # campioni TTS da generare
+    voices_per_engine: 10     # voci TTS diverse
+    speed_range: [0.85, 1.15] # variazione velocità
+    pitch_range: [-3, 3]      # semitoni
+    phrases:
+      - "{wake_word}"
+      - "hey {wake_word}"
+      - "ok {wake_word}"
+      - "{wake_word} ascoltami"
+      - "ciao {wake_word}"
+  negative:
+    target_hours: 500
+    sources:
+      - "common_voice"        # Mozilla Common Voice
+      - "librispeech"         # LibriSpeech ASR corpus
+      - "musan"               # Music/Speech/Noise dataset
+      - "freesound"           # Rumori domestici
+    hard_negatives:           # Parole simili - critiche!
+      - "area"
+      - "maria"
+      - "varia"
+
+augmentation:
+  noise:
+    snr_range_db: [5, 30]     # SNR basso = molto rumore
+    types: ["white", "pink", "babble", "domestic"]
+  reverb:
+    room_scale: [0.1, 0.5]    # 0=anechoica, 1=grande stanza
+    wet_level: [0.0, 0.3]     # livello riverbero (basso per non degradare)
+  distance:
+    near_db: 0
+    far_db: -18               # simulazione 3-5 metri
+  time_stretch: [0.9, 1.1]
+
+training:
+  backbone: "google/speecht5_tts"  # feature extractor pre-trained
+  model_type: "dnn"                # dnn | rnn - dnn più veloce su CPU
+  hidden_units: [128, 64, 32]      # architettura leggera
+  dropout: 0.3
+  batch_size: 256
+  epochs: 100
+  learning_rate: 0.001
+  early_stopping_patience: 10
+  val_split: 0.1
+  positive_weight: 5.0             # peso campioni positivi (dataset sbilanciato)
+
+optimization:
+  format: "tflite"                 # tflite | onnx
+  quantization: "int8"             # int8 | fp16 | dynamic
+  target_device: "rpi"
+  expected_model_size_kb: 200      # target < 500KB
+
+inference:
+  threshold: 0.70                  # soglia base
+  smoothing_window: 4              # media mobile su N frame
+  refractory_period_s: 2.0         # pausa dopo detection
+  vad_enabled: true                # abilita VAD per risparmio CPU
+  vad_threshold: 0.5
+  debug_mode: false

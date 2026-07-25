@@ -1,0 +1,22 @@
+# requirements_rpi.txt - Solo per inferenza su Raspberry Pi
+# Installa con: pip install -r requirements_rpi.txt
+#
+# NOTA: Su RPi 4/5 con Raspberry Pi OS Bookworm (64-bit)
+#   sudo apt-get install -y portaudio19-dev libatlas-base-dev
+
+# Inferenza (scegli UNO tra TFLite o ONNX)
+tflite-runtime>=2.14.0       # OPZIONE A: più leggero (consigliato RPi)
+# onnxruntime>=1.16.3        # OPZIONE B: onnx (migliore compatibilità)
+
+# Audio streaming
+pyaudio>=0.2.13
+numpy>=1.24.0
+
+# openWakeWord runtime (senza TF completo)
+openwakeword>=0.6.0
+
+# VAD leggero
+webrtcvad>=2.0.10            # Google WebRTC VAD - <1ms latenza
+
+# Utilities
+pyyaml>=6.0.1

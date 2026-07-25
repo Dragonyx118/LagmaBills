@@ -1,0 +1,36 @@
+# requirements_dev.txt - Per training su PC/server (non RPi)
+# Installa con: pip install -r requirements_dev.txt
+
+# Core ML
+openwakeword>=0.6.0
+tensorflow>=2.12.0,<2.16.0
+onnxruntime>=1.16.0
+tf2onnx>=1.15.0
+
+# Audio processing
+librosa>=0.10.0
+soundfile>=0.12.3
+audiomentations>=0.33.0      # augmentation avanzata
+pyroomacoustics>=0.7.3       # simulazione riverbero realistico
+pydub>=0.25.1
+
+# TTS per dataset positivo
+TTS>=0.22.0                  # Coqui TTS (molte voci)
+edge-tts>=6.1.9              # Microsoft Edge TTS (gratuito, online)
+gtts>=2.5.1                  # Google TTS (fallback)
+
+# Dataset management
+datasets>=2.14.0             # HuggingFace datasets
+huggingface-hub>=0.17.0
+
+# Training utilities
+numpy>=1.24.0
+scipy>=1.11.0
+scikit-learn>=1.3.0
+matplotlib>=3.7.0
+tqdm>=4.66.0
+pyyaml>=6.0.1
+
+# Audio I/O (sviluppo)
+pyaudio>=0.2.13
+sounddevice>=0.4.6
