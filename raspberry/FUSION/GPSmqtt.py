@@ -12,6 +12,7 @@ Dipendenze: pip install pyserial pynmea2 paho-mqtt
 
 import json
 import time
+import socket
 import serial
 import pynmea2
 import paho.mqtt.client as mqtt
@@ -23,6 +24,11 @@ MQTT_BROKER = "100.100.61.49"
 MQTT_PORT   = 1883
 TOPIC       = "robot/gps"
 CLIENT_ID   = "gps_publisher"
+
+# UDP verso il PC di controllo (basta un IP, es. Tailscale del PC)
+PC_IP       = "100.111.169.44"   # ← cambia con l'IP Tailscale del tuo PC
+UDP_PORT    = 5568
+udp_sock    = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 # ── MQTT ─────────────────────────────────────────────────────────
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=CLIENT_ID)
@@ -73,6 +79,13 @@ def main():
                         "ts":    time.time(),
                     }
                     client.publish(TOPIC, json.dumps(payload))
+
+                    # Invio anche via UDP diretto al PC (bassa latenza, no broker)
+                    try:
+                        udp_sock.sendto(json.dumps(payload).encode(), (PC_IP, UDP_PORT))
+                    except OSError as e:
+                        pass  # PC irraggiungibile, non bloccare il logging GPS
+
                     print(f"[GPS] Lat:{payload['lat']:.6f} Lon:{payload['lon']:.6f} "
                           f"Alt:{payload['alt']:.1f}m Sat:{payload['sat']} "
                           f"Vel:{payload['speed']:.1f}kn")

@@ -55,12 +55,9 @@ def avvia_drone():
     print("\n[DRONE] Avvio moduli...")
     avvia_comando(["python3", os.path.expanduser("~/FUSION/droneMqttNew.py")])
 
-def avvia_odometria():
-    print("\n[ODOMETRIA] Avvio moduli...")
-    avvia_comando(["python3", os.path.expanduser("~/FUSION/odo/myViewerServer.py")])
-    avvia_comando(["python3", os.path.expanduser("~/FUSION/odo/navigator.py")])
-    avvia_comando(["python3", os.path.expanduser("~/FUSION/odo/occupacyGrid.py")])
-    avvia_comando(["python3", os.path.expanduser("~/FUSION/odo/odometria.py")])
+def avvia_esplorazione():
+    print("\n[ESPLORAZIONE AUTONOMA] Avvio moduli...")
+    avvia_comando(["python3", os.path.expanduser("~/FUSION/esplorazione.py")])
 
 def avvia_insegui_linea():
     print("\n[INSEGUI LINEA] Avvio moduli...")
@@ -73,7 +70,7 @@ def mostra_menu():
     print("  1. Generale")
     print("  2. Jarvis")
     print("  3. Drone")
-    print("  4. Odometria")
+    print("  4. Esplorazione autonoma")
     print("  5. Insegui Linea")
     print("─" * 40)
     print("  s. Stato processi attivi")
@@ -105,7 +102,7 @@ def main():
             elif scelta == "3":
                 avvia_drone()
             elif scelta == "4":
-                avvia_odometria()
+                avvia_esplorazione()
             elif scelta == "5":
                 avvia_insegui_linea()
             elif scelta == "s":
