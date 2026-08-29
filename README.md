@@ -10,10 +10,6 @@
 ![AI](https://img.shields.io/badge/AI-Whisper%20%7C%20YOLOv8%20%7C%20Ollama-lightgrey)
 ![License](https://img.shields.io/badge/license-Hippocratic%203.0-red)
 
-<p align="center">
-  <img src="docs/img/aura.jpeg" alt="LagmaBills robot" width="600">
-</p>
-
 A Mecanum-wheeled robot for civil protection, powered by a Raspberry Pi orchestrating two custom ESP32 PCBs, sensors, a robotic arm, and a drone companion over MQTT. It navigates autonomously, maps its environment, avoids obstacles, and is controlled via voice AI, a MAUI app, or browser dashboard.
 
 Presentato ad Arduino Day 2025.
