@@ -15,8 +15,8 @@ A Mecanum-wheeled robot for civil protection, powered by a Raspberry Pi orchestr
 Presentato ad Arduino Day 2025.
 
 ## Team
-- **Daniele Cerioli** — firmware, software, PCB, integrazione di sistema
-- **Simone Panelli** — componenti AI
+- **Daniele Cerioli (Dragonyx)** — firmware, software, PCB, integrazione di sistema
+- **Simone Panelli (Tabella_Brodosa)** — componenti AI
 - **Andrei Corduneanu** — modellazione 3D, falegnameria
 
 ## Repositories
