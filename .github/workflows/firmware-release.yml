@@ -29,7 +29,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-firmware
-          name: "Firmware ESP32 (ultima versione)"
+          name: "Firmware ESP32 (Latest version)"
           body: "Aggiornato automaticamente ad ogni push su main che modifica firmware_esp32/. Commit: ${{ github.sha }}"
           files: |
             firm_esp32_motori.zip
