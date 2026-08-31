@@ -4,11 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - 'firmware/**'
+      - 'firmware_esp32/**' # Modificato da 'firmware/**' a 'firmware_esp32/**'
+  workflow_dispatch: # Permette di avviarlo manualmente da GitHub Actions
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Necessario per creare o aggiornare le release
     steps:
       - uses: actions/checkout@v4
 
