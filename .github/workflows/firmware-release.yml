@@ -27,7 +27,7 @@ jobs:
         with:
           tag_name: latest-firmware
           name: "Firmware ESP32 (ultima versione)"
-          body: "Aggiornato automaticamente ad ogni push su main che modifica firmware/. Commit: ${{ github.sha }}"
+          body: "Aggiornato automaticamente ad ogni push su main che modifica firmware_esp32/. Commit: ${{ github.sha }}"
           files: |
             firm_esp32_motori.zip
             firm_esp32_sensori.zip
