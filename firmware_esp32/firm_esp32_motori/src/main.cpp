@@ -50,7 +50,7 @@
 #define RR_CH 3
 
 // ════════════════════════════════════════════════════════════════
-//  ⚙️  SOGLIE SICUREZZA ULTRASUONI — MODIFICA QUI
+//  SOGLIE SICUREZZA ULTRASUONI — MODIFICA QUI
 //
 //  Distanza minima (cm) sotto la quale il movimento nella direzione
 //  corrispondente viene BLOCCATO, qualunque sia il comando ricevuto.
