@@ -1,121 +1,83 @@
 /*
  * ================================================================
- *  ESP32 SENSORI — FIRMWARE v5
+ *  ESP32 SENSORI — FIRMWARE SOLO I2C (WiFi/MQTT rimossi)
  *
- *  FIX v5 rispetto a v4:
- *  1. Ultrasuoni: lettura atomica echoGot/Rise/Fall con noInterrupts()
- *  2. Ultrasuoni: timeout aumentato a 25ms (era 38ms ma partiva da
- *     stateStartUs = dopo il trigger, non dopo l'invio del pulse)
- *     → ora il timeout è misurato CORRETTAMENTE dall'inizio di ST_WAIT_END
- *  3. Ultrasuoni: stato ST_WAIT_START rimosso dalla macchina a stati
- *     (non era usato ma causava confusione)
- *  4. Ultrasuoni: echoGot viene resettato SOLO quando lo leggiamo,
- *     mai all'inizio di ST_IDLE, per evitare race condition
- *  5. MQTT: resolveBroker() rimossa da manageMqtt() (loop ogni 5s
- *     che bloccava il loop principale per 3s di timeout mDNS)
- *     → ora resolveBroker viene chiamata SOLO al boot (setup) e
- *       quando arrivano nuove credenziali via I2C
- *  6. MQTT: setServer() chiamata una volta sola, non ad ogni riconnessione
- *  7. Loop: tutto il codice che era in setup() rimane invariato
+ *  Il Raspberry Pi è l'UNICO punto di comunicazione con l'esterno.
+ *  Questo ESP32 parla SOLO via I2C slave (0x09) col Pi — nessun WiFi,
+ *  nessun MQTT, nessuna gestione credenziali/broker/mDNS. Tutto il
+ *  traffico verso controller esterni/dashboard passa dal Pi, che
+ *  legge il buffer sensori via I2C e scrive comandi servo via I2C.
  *
- *  Ultrasuoni + TCRT + MPU6050 + PCA9685 servo
- *  + WiFi + MQTT (PubSubClient) + NVS credentials
- *  + WiFi recovery con retry al boot (20 tentativi × 500ms)
- *  + Controllo servo braccio via Seriale (115200 baud)
- *  + Controllo servo braccio via MQTT
- *  + Coda servo sequenziale con movimento smooth (un servo alla volta)
- *  + Controllo velocità servo via MQTT
- *  + 7° servo (CH6) con limiti 80°–170°
+ *  FIX rispetto alla versione con WiFi/MQTT:
  *
- * ────────────────────────────────────────────────────────────────
- *  COMANDI SERIALI SERVO (terminare con Invio):
+ *  1. RIMOSSO tutto il networking (WiFi, MQTT, mDNS, NVS credenziali,
+ *     ArduinoJson — non più necessario senza parsing JSON via MQTT)
  *
- *  ── SERVO SINGOLO (posizione assoluta) ────────────────────────
- *  s0 <0-180>     → Servo canale 0  (es: s0 90)  [accodato, smooth]
- *  s1..s6         → idem per altri canali
- *                   NOTA: s6 è limitato a 80°–170°
+ *  2. AGGIUNTO opcode I2C 0xAD (ch, ang) → enqueueServo() [smooth]
+ *     Il bridge Python sul Pi (testI2C.py) manda già questo opcode
+ *     per i comandi servo (sia da MQTT robot/sensori/cmd sia da UDP
+ *     diretto porta 5566) — prima d'ora l'I2C handler qui riconosceva
+ *     solo 0xAA (posizione immediata) e 0xAB (relativo immediato),
+ *     quindi 0xAD veniva SEMPRE ignorato silenziosamente: i comandi
+ *     servo dal Pi non arrivavano mai a destinazione via I2C.
+ *     Ora 0xAD usa la coda smooth (stesso movimento graduale già
+ *     usato dai comandi seriali s0..s6).
  *
- *  ── SERVO SINGOLO (movimento relativo) ────────────────────────
- *  r0 <-90..90>   → Muovi servo 0 di +/- gradi (es: r0 10) [accodato]
- *  r1..r6         → idem per altri canali
+ *  3. ULTRASUONI — rivisti per correttezza e frequenza:
+ *     - Macchina a stati a 3 fasi (ST_IDLE → ST_TRIG_HIGH → ST_WAIT_END)
+ *       con lettura ISR atomica (noInterrupts/interrupts): CORRETTA,
+ *       nessun bug di race condition trovato.
+ *     - Timeout eco: 25ms = ~430cm (formula distanza_cm = durata_us/58
+ *       verificata: 25000/58 ≈ 431cm) → margine coerente col taglio
+ *       fisico a DIST_MAX_CM=300cm. CORRETTO.
+ *     - TRIGGER_INTERVAL_US ridotto da 50ms a 30ms per aumentare la
+ *       frequenza di refresh per sensore da ~20Hz a ~33Hz. Lo
+ *       sfalsamento iniziale di 9ms tra i 6 sensori (al boot) è
+ *       preservato nel tempo perché ogni sensore riprogramma il
+ *       proprio prossimo trigger relativamente al proprio timestamp
+ *       precedente, non a un clock globale — quindi il rischio di
+ *       interferenza acustica tra sensori vicini resta basso.
+ *       Se in pratica noti letture erratiche/rumorose con 6 sensori
+ *       ravvicinati, alza di nuovo questo valore verso 40-50ms.
  *
- *  ── PIÙ SERVO INSIEME (posizione assoluta) ────────────────────
- *  set <s0> <s1> <s2> <s3> <s4> <s5> <s6>
- *                 → Imposta tutti e 7 in sequenza s0→s6 [accodato]
- *                   Usa -1 per lasciare invariato un servo
- *
- *  ── RAW TICK ─────────────────────────────────────────────────
- *  raw <ch> <tick> → Imposta tick PWM diretto IMMEDIATO (es: raw 0 307)
- *
- *  ── PRESET ────────────────────────────────────────────────────
- *  home           → Tutti i servo in posizione home [accodato]
- *  riposo         → Posizione di riposo braccio abbassato [accodato]
- *
- *  ── RELÈ POMPA ────────────────────────────────────────────────
- *  rele on        → Accende la pompa
- *  rele off       → Spegne la pompa
- *
- *  ── INFO ──────────────────────────────────────────────────────
- *  pos            → Posizione attuale di tutti i servo
- *  dist           → Distanze ultrasuoni
- *  imu            → Dati IMU (acc + gyro)
- *  tcrt           → Stato sensori TCRT
- *  tcrt watch     → Monitor live TCRT (premi Invio per uscire)
- *  stato          → Stato completo (servo + sensori + WiFi + MQTT)
- *  help           → Mostra questo elenco
+ *  4. TUTTO IL RESTO invariato: servo coda smooth, MPU6050, TCRT,
+ *     relè, comandi seriali via USB per debug.
  *
  * ────────────────────────────────────────────────────────────────
- *  MQTT TOPICS IN INGRESSO  →  robot/sensori/cmd
- *  Payload JSON:
+ *  COMANDI SERIALI (invariati, terminare con Invio):
+ *  s0..s6 <gradi>   r0..r6 <delta>   set <s0>..<s6>
+ *  raw <ch> <tick>  home  riposo  rele on/off
+ *  pos  dist  imu  tcrt  tcrt watch  stato  help
  *
- *  {"cmd":"servo",       "ch":0,   "ang":90}
- *  {"cmd":"servo_rel",   "ch":0,   "delta":10}
- *  {"cmd":"set",         "s0":90,  "s1":45, "s2":135, "s3":90, "s4":90, "s5":60, "s6":125}
- *                        (usa -1 per lasciare invariato)
- *  {"cmd":"home"}
- *  {"cmd":"riposo"}
- *  {"cmd":"servo_speed", "ms":8}   → velocità: ms tra un passo e l'altro (1-50)
- *                                    default=8 (~125°/s), più alto=più lento
- *  {"cmd":"rele",        "val":1}  (1=on, 0=off)
- *  {"cmd":"get_stato"}             → forza pubblicazione immediata tutto
+ * ────────────────────────────────────────────────────────────────
+ *  COMANDI I2C IN INGRESSO (dal Pi, indirizzo slave 0x09):
+ *   0xAA <ch> <ang>        → setServo immediato (0-180, salta la coda)
+ *   0xAB <ch> <val+128>    → moveServo relativo immediato
+ *   0xAC <val>             → relè (1=on, 0=off)
+ *   0xAD <ch> <ang>        → enqueueServo SMOOTH (usato dal Pi bridge)
+ *   0xAE                   → home (tutti i servo, smooth)
+ *   0xAF                   → riposo (smooth)
+ *   0xB0 <ms>              → velocità servo (ms/passo, 1-50)
+ *   0xFD / 0xFE            → RIMOSSI (erano credenziali WiFi)
  *
- *  MQTT TOPICS IN USCITA:
- *  robot/sensori/servo   → posizioni correnti (publish al completamento mossa)
- *  robot/sensori/servo_speed → velocità corrente in ms/passo (retain)
+ *  BUFFER I2C IN USCITA (26 byte, richiesta standard I2C read):
+ *   [0-11]  distanze ultrasuoni (6 × uint16 LE, cm, 9999=fuori portata)
+ *   [12-23] IMU (ax,ay,az,gx,gy,gz) int16 LE ×100
+ *   [24]    TCRT mask (bit0=sx bit1=cen bit2=dx, 1=nero)
+ *   [25]    relè (0/1)
  *
  * ────────────────────────────────────────────────────────────────
  *  MAPPA SERVO BRACCIO:
- *   CH0 → Base rotazione
- *   CH1 → Spalla
- *   CH2 → Gomito
+ *   CH0 → Base rotazione       CH4 → Polso rotazione
+ *   CH1 → Spalla                CH5 → Pinza (home=120°)
+ *   CH2 → Gomito                CH6 → Settimo/telecamera (80°-170°, home=125°)
  *   CH3 → Polso verticale
- *   CH4 → Polso rotazione
- *   CH5 → Pinza (home=120°)
- *   CH6 → Settimo servo (limiti: 80°–170°, home=125°)
  * ================================================================
  */
 
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
 #include <MPU6050_light.h>
-#include <WiFi.h>
-#include <ESPmDNS.h>
-#include <PubSubClient.h>
-#include <Preferences.h>
-#include <ArduinoJson.h>
-
-// ── CREDENZIALI DEFAULT ───────────────────────────────────────────
-#define WIFI_SSID_DEFAULT   "LAPTOP1234"
-#define WIFI_PASS_DEFAULT   "12345678"
-#define MQTT_BROKER_DEFAULT "LagmaBills"   // hostname mDNS del Pi
-#define MQTT_PORT           1883
-#define MQTT_CLIENT_ID      "esp32_sensori"
-
-// ── NVS ──────────────────────────────────────────────────────────
-#define NVS_NAMESPACE  "wifi_cfg"
-#define NVS_KEY_SSID   "ssid"
-#define NVS_KEY_PASS   "pass"
-#define NVS_KEY_BROKER "broker"
 
 // ── I2C ──────────────────────────────────────────────────────────
 #define I2C_SLAVE_ADDR 0x09
@@ -129,7 +91,6 @@
 #define SERVO_MAX  512
 #define NUM_SERVO  7
 
-// Limiti per servo 6 (CH6)
 #define SERVO6_MIN_DEG  80
 #define SERVO6_MAX_DEG  170
 
@@ -167,7 +128,6 @@ uint32_t lastServoStepMs    = 0;
 uint8_t  servoStepMs        = 8;
 
 int  degreesToTick(int deg);
-void publishServoStato();
 
 bool enqueueServo(uint8_t ch, int target) {
   if (servoQCount >= SERVO_QUEUE_SIZE) {
@@ -208,7 +168,6 @@ void updateServoQueue() {
 
   if (servoPos[m.ch] == m.target) {
     Serial.printf("[SERVO] S%d %s-> %d gradi OK\n", m.ch, SERVO_NAMES[m.ch], m.target);
-    publishServoStato();
     servoQHead  = (servoQHead + 1) % SERVO_QUEUE_SIZE;
     servoQCount--;
     servoCurrentTarget = -1;
@@ -216,22 +175,28 @@ void updateServoQueue() {
 }
 
 // ── ULTRASUONI ────────────────────────────────────────────────────
-// FIX v5: stato a 3 fasi (rimosso ST_WAIT_START inutile).
-// Timeout misurato da quando entriamo in ST_WAIT_END (dopo il pulse LOW).
-// echoGot letto atomicamente con noInterrupts()/interrupts().
-// echoGot NON viene mai azzerato in ST_IDLE per evitare race condition.
+// Stato a 3 fasi. Timeout misurato da quando entriamo in ST_WAIT_END
+// (dopo il pulse LOW). echoGot letto atomicamente con noInterrupts().
+// echoGot NON viene mai azzerato in ST_IDLE per evitare race condition
+// (si azzera solo quando lo leggiamo, in ST_WAIT_END).
 
 #define NSENS 6
 const uint8_t TRIG_PINS[NSENS]    = { 27, 25, 4,  13, 18, 16 };
 const uint8_t ECHO_PINS[NSENS]    = { 14, 26, 5,  12, 19, 17 };
 const char*   SENSOR_NAMES[NSENS] = { "FRONTE", "RETRO", "SINISTRA", "DESTRA", "CLIFF_F", "CLIFF_R" };
 
-#define TRIGGER_PULSE_US       10      // durata pulse TRIG (10µs)
-#define TRIGGER_INTERVAL_US    50000   // intervallo tra trigger (50ms)
+#define TRIGGER_PULSE_US       10      // durata pulse TRIG (10µs, min HC-SR04)
 
-// Timeout attesa eco: 25ms = ~430cm, abbondante per un robot indoor.
-// HC-SR04 range reale: 2cm-400cm → eco max ~23ms.
-// 25ms lascia margine per latenza del loop.
+// Intervallo minimo tra due trigger dello STESSO sensore.
+// Ridotto da 50ms a 30ms → refresh per sensore ~33Hz (era ~20Hz).
+// Lo sfalsamento di 9ms tra sensori (impostato al boot) limita il
+// rischio di crosstalk acustico tra HC-SR04 ravvicinati. Se nella
+// pratica vedi letture rumorose/incoerenti con più sensori vicini,
+// alza questo valore (es. torna a 40000-50000).
+#define TRIGGER_INTERVAL_US    30000
+
+// Timeout attesa eco: 25ms = ~430cm (distanza_cm = durata_us/58).
+// HC-SR04 range reale: 2cm-400cm → eco max ~23ms, 25ms lascia margine.
 #define ECHO_TIMEOUT_US        25000
 
 // Distanza massima valida in cm (oltre = oggetto fuori portata)
@@ -249,12 +214,10 @@ struct Sensor {
 };
 Sensor sensors[NSENS];
 
-// Variabili ISR — IRAM, volatile, accesso atomico obbligatorio
 volatile uint32_t echoRiseUs[NSENS];
 volatile uint32_t echoFallUs[NSENS];
 volatile bool     echoGot[NSENS];
 
-// ISR per ogni sensore: salva timestamp rise/fall, setta echoGot
 void IRAM_ATTR echoISR0(){ if(digitalRead(ECHO_PINS[0])){ echoRiseUs[0]=micros(); } else { echoFallUs[0]=micros(); echoGot[0]=true; } }
 void IRAM_ATTR echoISR1(){ if(digitalRead(ECHO_PINS[1])){ echoRiseUs[1]=micros(); } else { echoFallUs[1]=micros(); echoGot[1]=true; } }
 void IRAM_ATTR echoISR2(){ if(digitalRead(ECHO_PINS[2])){ echoRiseUs[2]=micros(); } else { echoFallUs[2]=micros(); echoGot[2]=true; } }
@@ -267,7 +230,7 @@ void IRAM_ATTR echoISR5(){ if(digitalRead(ECHO_PINS[5])){ echoRiseUs[5]=micros()
 #define TCRT_CENTRO 36
 #define TCRT_DX     23
 
-uint8_t  lastTcrtDebug = 0xFF;
+uint8_t lastTcrtDebug = 0xFF;
 
 // ── MPU6050 (su Wire1) ────────────────────────────────────────────
 #define MPU_INT_PIN   34
@@ -294,25 +257,6 @@ uint8_t  rxBuf[128];
 uint8_t  rxLen = 0;
 volatile bool newCmd = false;
 
-// ── WiFi / MQTT ───────────────────────────────────────────────────
-WiFiClient   wifiClient;
-PubSubClient mqtt(wifiClient);
-Preferences  prefs;
-
-char wifiSsid[64];
-char wifiPass[64];
-char mqttBroker[64];
-
-uint32_t lastWifiCheck   = 0;
-uint32_t lastMqttCheck   = 0;
-uint32_t lastPublishSens = 0;
-uint32_t lastPublishImu  = 0;
-uint32_t lastPublishTcrt = 0;
-uint8_t  lastTcrtMask    = 0xFF;
-
-volatile bool wifiReconnectRequest = false;
-volatile bool mqttReconnectRequest = false;
-
 // ════════════════════════════════════════════════════════════════
 //  Prototipi
 // ════════════════════════════════════════════════════════════════
@@ -321,293 +265,8 @@ void setServo(uint8_t ch, int deg);
 void moveServo(uint8_t ch, int delta);
 void servoHome();
 void servoRiposo();
-void publishServoStato();
-void publishServoSpeed();
-void publishReleStato();
-void publishDistanze();
-void publishImu();
-void publishTcrt(uint8_t mask);
 void updateTCRT();
 uint16_t mediana3(uint16_t a, uint16_t b, uint16_t c);
-
-// ════════════════════════════════════════════════════════════════
-//  NVS
-// ════════════════════════════════════════════════════════════════
-
-void loadCredentials() {
-  prefs.begin(NVS_NAMESPACE, true);
-  String ssid   = prefs.getString(NVS_KEY_SSID,   WIFI_SSID_DEFAULT);
-  String pass   = prefs.getString(NVS_KEY_PASS,   WIFI_PASS_DEFAULT);
-  String broker = prefs.getString(NVS_KEY_BROKER, MQTT_BROKER_DEFAULT);
-  prefs.end();
-  ssid.toCharArray(wifiSsid,    sizeof(wifiSsid));
-  pass.toCharArray(wifiPass,    sizeof(wifiPass));
-  broker.toCharArray(mqttBroker, sizeof(mqttBroker));
-  Serial.printf("Creds: SSID=%s BROKER=%s\n", wifiSsid, mqttBroker);
-}
-
-void saveCredentials(const char* ssid, const char* pass, const char* broker) {
-  prefs.begin(NVS_NAMESPACE, false);
-  if (ssid   && ssid[0])   prefs.putString(NVS_KEY_SSID,   ssid);
-  if (pass   && pass[0])   prefs.putString(NVS_KEY_PASS,   pass);
-  if (broker && broker[0]) prefs.putString(NVS_KEY_BROKER, broker);
-  prefs.end();
-  Serial.printf("NVS saved: SSID=%s BROKER=%s\n",
-                ssid   ? ssid   : "-",
-                broker ? broker : "-");
-}
-
-// ════════════════════════════════════════════════════════════════
-//  mDNS — FIX v5: chiamata SOLO al boot e su cambio credenziali,
-//  NON più dentro manageMqtt() (evita blocco 3s ogni 5s)
-// ════════════════════════════════════════════════════════════════
-
-void resolveBroker() {
-  const char* host = MQTT_BROKER_DEFAULT;
-  MDNS.begin("esp32-sensori");
-  Serial.printf("[mDNS] Risoluzione %s.local...\n", host);
-  IPAddress ip = MDNS.queryHost(host, 3000);
-  if (ip != INADDR_NONE) {
-    String ipStr = ip.toString();
-    ipStr.toCharArray(mqttBroker, sizeof(mqttBroker));
-    Serial.printf("[mDNS] Trovato: %s\n", mqttBroker);
-    prefs.begin(NVS_NAMESPACE, false);
-    prefs.putString(NVS_KEY_BROKER, ipStr);
-    prefs.end();
-  } else {
-    Serial.printf("[mDNS] Non trovato, uso NVS fallback: %s\n", mqttBroker);
-  }
-}
-
-// ════════════════════════════════════════════════════════════════
-//  WiFi
-// ════════════════════════════════════════════════════════════════
-
-void manageWifi() {
-  if ((millis() - lastWifiCheck) < 5000) return;
-  lastWifiCheck = millis();
-  if (wifiReconnectRequest) {
-    wifiReconnectRequest = false;
-    loadCredentials();
-    WiFi.disconnect(true);
-    delay(200);
-    WiFi.begin(wifiSsid, wifiPass);
-    Serial.println("Riconnessione WiFi con nuove credenziali...");
-    return;
-  }
-  if (!WiFi.isConnected()) {
-    Serial.println("WiFi disconnesso, riconnessione...");
-    WiFi.reconnect();
-  }
-}
-
-// ════════════════════════════════════════════════════════════════
-//  MQTT callback
-// ════════════════════════════════════════════════════════════════
-
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  char msg[256];
-  if (length >= sizeof(msg)) return;
-  memcpy(msg, payload, length);
-  msg[length] = '\0';
-  Serial.printf("MQTT RX [%s]: %s\n", topic, msg);
-
-  StaticJsonDocument<256> doc;
-  if (deserializeJson(doc, msg) != DeserializationError::Ok) return;
-  const char* cmd = doc["cmd"];
-  if (!cmd) return;
-
-  if (strcmp(cmd, "servo") == 0) {
-    uint8_t ch  = doc["ch"]  | 0;
-    int     ang = doc["ang"] | 90;
-    if (ch < NUM_SERVO) {
-      enqueueServo(ch, ang);
-      Serial.printf("MQTT -> S%d %s-> %d gradi (accodato)\n", ch, SERVO_NAMES[ch], ang);
-    }
-
-  } else if (strcmp(cmd, "servo_rel") == 0) {
-    uint8_t ch    = doc["ch"]    | 0;
-    int     delta = doc["delta"] | 0;
-    if (ch < NUM_SERVO) {
-      enqueueServo(ch, servoPos[ch] + delta);
-      Serial.printf("MQTT -> R%d %s%+d gradi (accodato)\n", ch, SERVO_NAMES[ch], delta);
-    }
-
-  } else if (strcmp(cmd, "set") == 0) {
-    Serial.println(F("MQTT SET servo (accodato s0->s6):"));
-    for (uint8_t i = 0; i < NUM_SERVO; i++) {
-      char key[3] = { 's', (char)('0' + i), '\0' };
-      int v = doc[key] | -1;
-      if (v >= 0) {
-        enqueueServo(i, v);
-        Serial.printf("  S%d %s-> %d gradi\n", i, SERVO_NAMES[i], v);
-      } else {
-        Serial.printf("  S%d %sinvariato (%d gradi)\n", i, SERVO_NAMES[i], servoPos[i]);
-      }
-    }
-
-  } else if (strcmp(cmd, "home") == 0) {
-    servoHome();
-
-  } else if (strcmp(cmd, "riposo") == 0) {
-    servoRiposo();
-
-  } else if (strcmp(cmd, "servo_speed") == 0) {
-    int ms = doc["ms"] | -1;
-    if (ms >= 1 && ms <= 50) {
-      servoStepMs = (uint8_t)ms;
-      Serial.printf("MQTT -> Velocita servo: %d ms/passo (~%.0f gradi/s)\n",
-                    servoStepMs, 1000.0f / servoStepMs);
-      publishServoSpeed();
-    } else {
-      Serial.printf("MQTT -> servo_speed: valore %d fuori range (1-50)\n", ms);
-    }
-
-  } else if (strcmp(cmd, "rele") == 0) {
-    bool on = (doc["val"] | 0) ? true : false;
-    digitalWrite(RELE_PIN, on ? HIGH : LOW);
-    Serial.printf("MQTT -> Rele %s\n", on ? "ON" : "OFF");
-    publishReleStato();
-
-  } else if (strcmp(cmd, "get_stato") == 0) {
-    publishDistanze();
-    publishImu();
-    publishTcrt(i2cBuf[24]);
-    publishServoStato();
-    publishServoSpeed();
-    publishReleStato();
-  }
-}
-
-// ════════════════════════════════════════════════════════════════
-//  MQTT management — FIX v5: resolveBroker() RIMOSSA da qui.
-//  setServer() chiamata solo se il broker è cambiato.
-// ════════════════════════════════════════════════════════════════
-
-void manageMqtt() {
-  if (!WiFi.isConnected()) return;
-
-  // Se arrivano nuove credenziali via I2C, aggiorna server e riconnetti
-  if (mqttReconnectRequest) {
-    mqttReconnectRequest = false;
-    mqtt.disconnect();
-    mqtt.setServer(mqttBroker, MQTT_PORT);
-    Serial.printf("MQTT broker aggiornato: %s\n", mqttBroker);
-    lastMqttCheck = 0; // forza riconnessione immediata
-  }
-
-  if (!mqtt.connected()) {
-    if ((millis() - lastMqttCheck) < 5000) return;
-    lastMqttCheck = millis();
-    // FIX: NON chiamiamo più resolveBroker() qui (bloccava il loop 3s)
-    Serial.printf("Connessione MQTT a %s:%d...\n", mqttBroker, MQTT_PORT);
-    const char* lwtPayload = "{\"online\":false}";
-    if (mqtt.connect(MQTT_CLIENT_ID,
-                     nullptr, nullptr,
-                     "robot/sensori/stato",
-                     0, true, lwtPayload)) {
-      Serial.println("MQTT connesso");
-      mqtt.subscribe("robot/sensori/cmd");
-      mqtt.publish("robot/sensori/stato", "{\"online\":true}", true);
-      mqtt.publish("robot/sensori/log",   "esp32_sensori online");
-      publishServoStato();
-      publishServoSpeed();
-      publishReleStato();
-    } else {
-      Serial.printf("MQTT fallito rc=%d\n", mqtt.state());
-    }
-    return;
-  }
-
-  mqtt.loop();
-
-  if ((millis() - lastPublishSens) >= 200) {
-    lastPublishSens = millis();
-    publishDistanze();
-  }
-  if ((millis() - lastPublishImu) >= 200) {
-    lastPublishImu = millis();
-    publishImu();
-  }
-  if ((millis() - lastPublishTcrt) >= 100) {
-    lastPublishTcrt = millis();
-    uint8_t mask = i2cBuf[24];
-    if (mask != lastTcrtMask) {
-      lastTcrtMask = mask;
-      publishTcrt(mask);
-    }
-  }
-}
-
-// ════════════════════════════════════════════════════════════════
-//  MQTT publish helpers
-// ════════════════════════════════════════════════════════════════
-
-void publishDistanze() {
-  if (!mqtt.connected()) return;
-  uint16_t fr  = i2cBuf[0]  | ((uint16_t)i2cBuf[1]  << 8);
-  uint16_t re  = i2cBuf[2]  | ((uint16_t)i2cBuf[3]  << 8);
-  uint16_t sx  = i2cBuf[4]  | ((uint16_t)i2cBuf[5]  << 8);
-  uint16_t dx  = i2cBuf[6]  | ((uint16_t)i2cBuf[7]  << 8);
-  uint16_t clf = i2cBuf[8]  | ((uint16_t)i2cBuf[9]  << 8);
-  uint16_t clr = i2cBuf[10] | ((uint16_t)i2cBuf[11] << 8);
-  char buf[160];
-  snprintf(buf, sizeof(buf),
-    "{\"FRONTE\":%u,\"RETRO\":%u,\"SINISTRA\":%u,\"DESTRA\":%u,\"CLIFF_F\":%u,\"CLIFF_R\":%u}",
-    fr, re, sx, dx, clf, clr);
-  mqtt.publish("robot/sensori/distanze", buf);
-}
-
-void publishImu() {
-  if (!mqtt.connected()) return;
-  int16_t ax = (int16_t)(i2cBuf[12] | ((uint16_t)i2cBuf[13] << 8));
-  int16_t ay = (int16_t)(i2cBuf[14] | ((uint16_t)i2cBuf[15] << 8));
-  int16_t az = (int16_t)(i2cBuf[16] | ((uint16_t)i2cBuf[17] << 8));
-  int16_t gx = (int16_t)(i2cBuf[18] | ((uint16_t)i2cBuf[19] << 8));
-  int16_t gy = (int16_t)(i2cBuf[20] | ((uint16_t)i2cBuf[21] << 8));
-  int16_t gz = (int16_t)(i2cBuf[22] | ((uint16_t)i2cBuf[23] << 8));
-  char buf[160];
-  snprintf(buf, sizeof(buf),
-    "{\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f}",
-    ax/100.0f, ay/100.0f, az/100.0f,
-    gx/100.0f, gy/100.0f, gz/100.0f);
-  mqtt.publish("robot/sensori/imu", buf);
-}
-
-void publishTcrt(uint8_t mask) {
-  if (!mqtt.connected()) return;
-  char buf[48];
-  snprintf(buf, sizeof(buf),
-    "{\"sx\":%d,\"cen\":%d,\"dx\":%d}",
-    mask & 1, (mask >> 1) & 1, (mask >> 2) & 1);
-  mqtt.publish("robot/sensori/tcrt", buf);
-}
-
-void publishServoStato() {
-  if (!mqtt.connected()) return;
-  char buf[160];
-  snprintf(buf, sizeof(buf),
-    "{\"s0\":%d,\"s1\":%d,\"s2\":%d,\"s3\":%d,\"s4\":%d,\"s5\":%d,\"s6\":%d}",
-    servoPos[0], servoPos[1], servoPos[2],
-    servoPos[3], servoPos[4], servoPos[5], servoPos[6]);
-  mqtt.publish("robot/sensori/servo", buf, true);
-}
-
-void publishServoSpeed() {
-  if (!mqtt.connected()) return;
-  char buf[48];
-  snprintf(buf, sizeof(buf),
-    "{\"ms_per_step\":%d,\"deg_per_sec\":%.0f}",
-    servoStepMs, 1000.0f / servoStepMs);
-  mqtt.publish("robot/sensori/servo_speed", buf, true);
-}
-
-void publishReleStato() {
-  if (!mqtt.connected()) return;
-  char buf[24];
-  snprintf(buf, sizeof(buf), "{\"rele\":%d}", digitalRead(RELE_PIN) ? 1 : 0);
-  mqtt.publish("robot/sensori/rele", buf, true);
-}
 
 // ════════════════════════════════════════════════════════════════
 //  SERVO
@@ -641,7 +300,7 @@ void servoRiposo() {
 }
 
 // ════════════════════════════════════════════════════════════════
-//  CALLBACK I2C SLAVE
+//  CALLBACK I2C SLAVE — UNICO canale di comunicazione col Pi
 // ════════════════════════════════════════════════════════════════
 
 void onRequest() {
@@ -656,7 +315,7 @@ void onReceive(int numBytes) {
 }
 
 // ════════════════════════════════════════════════════════════════
-//  ESEGUI COMANDO I2C
+//  ESEGUI COMANDO I2C (chiamato nel loop, mai nell'ISR)
 // ════════════════════════════════════════════════════════════════
 
 void eseguiComando() {
@@ -664,53 +323,42 @@ void eseguiComando() {
   newCmd = false;
   uint8_t cmd = rxBuf[0];
 
-  if (cmd == 0xFD && rxLen >= 4) {
-    uint8_t lenIp = rxBuf[1];
-    if (lenIp == 0 || (2 + lenIp + 1) > (int)rxLen) return;
-    char newBroker[64]={0}, newSsid[64]={0}, newPass[64]={0};
-    memcpy(newBroker, rxBuf + 2, min((int)lenIp, 63));
-    int idx = 2 + lenIp;
-    uint8_t lenSsid = rxBuf[idx++];
-    if (lenSsid == 0 || idx + lenSsid > (int)rxLen) return;
-    memcpy(newSsid, rxBuf + idx, min((int)lenSsid, 63));
-    idx += lenSsid;
-    if (idx < (int)rxLen) {
-      uint8_t lenPass = rxBuf[idx++];
-      if (lenPass > 0 && idx + lenPass <= (int)rxLen)
-        memcpy(newPass, rxBuf + idx, min((int)lenPass, 63));
-    }
-    saveCredentials(newSsid, newPass, newBroker);
-    strncpy(wifiSsid,   newSsid,   sizeof(wifiSsid));
-    strncpy(wifiPass,   newPass,   sizeof(wifiPass));
-    strncpy(mqttBroker, newBroker, sizeof(mqttBroker));
-    wifiReconnectRequest = true;
-    mqttReconnectRequest = true;
+  if (rxLen < 3) {
+    // 0xAE (home) e 0xAF (riposo) sono comandi a 1 byte, gestiti sotto
+    if (cmd == 0xAE) { servoHome();   return; }
+    if (cmd == 0xAF) { servoRiposo(); return; }
     return;
   }
 
-  if (cmd == 0xFE && rxLen >= 4) {
-    uint8_t lenSsid = rxBuf[1];
-    if (lenSsid > 0 && (2 + lenSsid + 1) <= (int)rxLen) {
-      char newSsid[64]={0}, newPass[64]={0};
-      memcpy(newSsid, rxBuf + 2, min((int)lenSsid, 63));
-      uint8_t lenPass = rxBuf[2 + lenSsid];
-      if (lenPass > 0 && (2 + lenSsid + 1 + lenPass) <= (int)rxLen)
-        memcpy(newPass, rxBuf + 3 + lenSsid, min((int)lenPass, 63));
-      saveCredentials(newSsid, newPass, nullptr);
-      strncpy(wifiSsid, newSsid, sizeof(wifiSsid));
-      strncpy(wifiPass, newPass, sizeof(wifiPass));
-      wifiReconnectRequest = true;
-    }
-    return;
-  }
-
-  if (rxLen < 3) return;
   uint8_t ch  = rxBuf[1];
   uint8_t val = rxBuf[2];
 
-  if      (cmd == 0xAA && ch < NUM_SERVO) setServo(ch, (int)val);
-  else if (cmd == 0xAB && ch < NUM_SERVO) moveServo(ch, (int)val - 128);
-  else if (cmd == 0xAC) digitalWrite(RELE_PIN, val ? HIGH : LOW);
+  if (cmd == 0xAA && ch < NUM_SERVO) {
+    // Posizione assoluta IMMEDIATA (salta la coda, movimento a scatto)
+    setServo(ch, (int)val);
+
+  } else if (cmd == 0xAB && ch < NUM_SERVO) {
+    // Movimento relativo IMMEDIATO
+    moveServo(ch, (int)val - 128);
+
+  } else if (cmd == 0xAC) {
+    // Relè pompa
+    digitalWrite(RELE_PIN, val ? HIGH : LOW);
+
+  } else if (cmd == 0xAD && ch < NUM_SERVO) {
+    // FIX: opcode usato dal bridge Pi (testI2C.py) — mancava prima.
+    // Posizione assoluta SMOOTH (accodata, movimento graduale).
+    enqueueServo(ch, (int)val);
+
+  } else if (cmd == 0xB0) {
+    // Velocità servo: ms tra un passo e l'altro (1-50)
+    int ms = (int)val;
+    if (ms >= 1 && ms <= 50) {
+      servoStepMs = (uint8_t)ms;
+      Serial.printf("Velocita servo -> %d ms/passo (~%.0f gradi/s)\n",
+                    servoStepMs, 1000.0f / servoStepMs);
+    }
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -735,7 +383,6 @@ void printHelp() {
   Serial.println(F("  PIU SERVO INSIEME - sequenza s0->s6 [smooth]:"));
   Serial.println(F("    set <s0> <s1> <s2> <s3> <s4> <s5> <s6>"));
   Serial.println(F("        usa -1 per lasciare un servo invariato"));
-  Serial.println(F("        es: set 90 45 135 90 -1 -1 125"));
   Serial.println(F(""));
   Serial.println(F("  RAW TICK (calibrazione, movimento IMMEDIATO):"));
   Serial.println(F("    raw <ch> <tick>  es: raw 0 307"));
@@ -831,12 +478,9 @@ void printStato() {
   printDist();
   printImu();
   printTcrt();
-  Serial.println(F("--- RETE ----------------------------------------"));
-  Serial.printf("  WiFi : %s\n",
-    WiFi.isConnected() ? WiFi.localIP().toString().c_str() : "DISCONNESSO");
-  Serial.printf("  MQTT : %s  broker=%s\n",
-    mqtt.connected() ? "OK" : "DISCONNESSO", mqttBroker);
+  Serial.println(F("--- RELE ------------------------------------------"));
   Serial.printf("  Rele : %s\n", digitalRead(RELE_PIN) ? "ON" : "off");
+  Serial.println(F("  Comunicazione: SOLO I2C 0x09 col Raspberry Pi."));
   Serial.println(F("-------------------------------------------------\n"));
 }
 
@@ -977,7 +621,7 @@ void manageSerial() {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("== ESP32 Sensori v5 — ultrasuoni fix + MQTT fix ==");
+  Serial.println("== ESP32 Sensori — SOLO I2C (WiFi/MQTT rimossi) ==");
 
   pinMode(RELE_PIN,    OUTPUT); digitalWrite(RELE_PIN, LOW);
   pinMode(TCRT_SX,     INPUT);
@@ -987,9 +631,8 @@ void setup() {
 
   memset((void*)i2cBuf, 0, I2C_BUF_SIZE);
 
-  // Inizializza sensori ultrasuoni
-  // FIX v5: echoGot inizializzato a false, stagger temporale per evitare
-  // che 6 sensori sparino contemporaneamente (ogni 9ms di offset)
+  // Inizializza sensori ultrasuoni, sfalsati di 9ms l'uno dall'altro
+  // per ridurre il rischio di crosstalk acustico tra sensori vicini
   for (int i = 0; i < NSENS; i++) {
     pinMode(TRIG_PINS[i], OUTPUT);
     digitalWrite(TRIG_PINS[i], LOW);
@@ -1008,7 +651,6 @@ void setup() {
     bufWrite16(i * 2, 9999);
   }
 
-  // Collega interrupt DOPO aver fatto i pinMode
   attachInterrupt(digitalPinToInterrupt(ECHO_PINS[0]), echoISR0, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ECHO_PINS[1]), echoISR1, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ECHO_PINS[2]), echoISR2, CHANGE);
@@ -1037,54 +679,22 @@ void setup() {
   for (int i = 0; i < NUM_SERVO; i++) setServo(i, SERVO_HOME[i]);
   Serial.println("Braccio -> HOME (immediato, boot)");
 
-  // Wire DOPO — slave verso Pi
+  // Wire DOPO — slave verso Pi (UNICO canale di comunicazione)
   Wire.begin(I2C_SLAVE_ADDR, SDA_SLAVE, SCL_SLAVE, 100000);
   Wire.onRequest(onRequest);
   Wire.onReceive(onReceive);
   Serial.printf("I2C slave 0x%02X su SDA=%d SCL=%d\n", I2C_SLAVE_ADDR, SDA_SLAVE, SCL_SLAVE);
 
-  // WiFi
-  loadCredentials();
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(wifiSsid, wifiPass);
-  Serial.printf("Connessione WiFi a '%s'", wifiSsid);
-  {
-    uint8_t attempts = 0;
-    while (!WiFi.isConnected() && attempts < 20) {
-      delay(500);
-      Serial.print(".");
-      attempts++;
-    }
-    Serial.println();
-  }
-  if (WiFi.isConnected()) {
-    Serial.printf("WiFi OK -> IP: %s\n", WiFi.localIP().toString().c_str());
-    // FIX v5: resolveBroker() chiamata UNA SOLA VOLTA qui al boot
-    resolveBroker();
-  } else {
-    Serial.println("WiFi non raggiunto al boot — riprovo in background (manageWifi)");
-  }
-
-  // FIX v5: setServer() chiamata UNA SOLA VOLTA, non in ogni ciclo manageMqtt
-  mqtt.setServer(mqttBroker, MQTT_PORT);
-  mqtt.setCallback(mqttCallback);
-  mqtt.setKeepAlive(15);
-
-  Serial.printf("WiFi->%s | MQTT->%s\n", wifiSsid, mqttBroker);
   Serial.printf("Velocita servo default: %d ms/passo (~%.0f gradi/s)\n",
                 servoStepMs, 1000.0f / servoStepMs);
+  Serial.printf("Ultrasuoni: trigger ogni %dms/sensore (~%.0fHz refresh), timeout eco %dms\n",
+                TRIGGER_INTERVAL_US/1000, 1000000.0f/TRIGGER_INTERVAL_US, ECHO_TIMEOUT_US/1000);
+  Serial.println("Comunicazione: SOLO I2C 0x09 col Raspberry Pi. Nessun WiFi/MQTT.");
   Serial.println("Digita 'help' per la lista comandi.");
 }
 
 // ════════════════════════════════════════════════════════════════
-//  UPDATE ULTRASUONI — FIX v5
-//
-//  Cambiamenti rispetto a v4:
-//  1. Lettura atomica: echoGot/Rise/Fall letti con noInterrupts()
-//  2. echoGot NON azzerato in ST_IDLE (azzerato solo quando lo leggiamo)
-//  3. Timeout misurato da stateStartUs impostato all'entrata in ST_WAIT_END
-//  4. Timeout = ECHO_TIMEOUT_US (25ms), sufficiente per ~430cm + margine loop
-//  5. Stato ST_WAIT_START rimosso (non era usato)
+//  UPDATE ULTRASUONI
 // ════════════════════════════════════════════════════════════════
 
 void updateSensor(int idx) {
@@ -1095,12 +705,10 @@ void updateSensor(int idx) {
   switch (s.state) {
 
     case ST_IDLE:
-      // Aspetta l'intervallo minimo tra trigger
       if ((now - s.lastTriggerUs) >= TRIGGER_INTERVAL_US) {
-        // FIX v5: NON azzeriamo echoGot qui. Potrebbe esserci un eco residuo
-        // da un trigger precedente ancora in attesa di lettura — se lo azzeriamo
-        // qui, perdiamo quella misura. Lo azzereremo solo quando lo leggiamo
-        // in ST_WAIT_END.
+        // echoGot NON azzerato qui: potrebbe esserci un eco residuo
+        // ancora in attesa di lettura da un trigger precedente.
+        // Verrà azzerato solo quando lo leggiamo, in ST_WAIT_END.
         digitalWrite(TRIG, HIGH);
         s.state        = ST_TRIG_HIGH;
         s.stateStartUs = now;
@@ -1108,22 +716,21 @@ void updateSensor(int idx) {
       break;
 
     case ST_TRIG_HIGH:
-      // Mantieni TRIG HIGH per almeno TRIGGER_PULSE_US (10µs)
       if ((now - s.stateStartUs) >= TRIGGER_PULSE_US) {
         digitalWrite(TRIG, LOW);
         s.lastTriggerUs = now;
         s.state         = ST_WAIT_END;
-        // FIX v5: stateStartUs impostato QUI (dopo il LOW del trigger)
-        // e azzeramento echoGot in modo atomico prima di iniziare l'attesa
+        // stateStartUs impostato QUI (dopo il LOW del trigger), e
+        // azzeramento echoGot atomico prima di iniziare l'attesa:
+        // ora è sicuro azzerarlo, siamo appena partiti con QUESTO ping.
         noInterrupts();
-        echoGot[idx] = false;  // ora è sicuro: siamo appena partiti
+        echoGot[idx] = false;
         interrupts();
         s.stateStartUs = now;
       }
       break;
 
     case ST_WAIT_END: {
-      // FIX v5: lettura atomica delle variabili ISR
       noInterrupts();
       bool     got  = echoGot[idx];
       uint32_t rise = echoRiseUs[idx];
@@ -1132,7 +739,6 @@ void updateSensor(int idx) {
       interrupts();
 
       if (got) {
-        // Eco ricevuto: calcola distanza
         uint32_t dur = fall - rise;
         uint16_t cm  = (uint16_t)(dur / 58);
         if (cm > DIST_MAX_CM) cm = 9999;
@@ -1143,7 +749,6 @@ void updateSensor(int idx) {
         s.state = ST_IDLE;
 
       } else if ((now - s.stateStartUs) >= ECHO_TIMEOUT_US) {
-        // Timeout: nessun eco ricevuto entro 25ms → oggetto fuori portata
         s.history[s.histIdx % 3] = 9999;
         s.histIdx++;
         s.distanceCm = mediana3(s.history[0], s.history[1], s.history[2]);
@@ -1192,7 +797,6 @@ void loop() {
   eseguiComando();
   updateServoQueue();
 
-  // Aggiorna tutti i sensori ultrasuoni (state machine non bloccante)
   for (int i = 0; i < NSENS; i++) updateSensor(i);
 
   updateTCRT();
@@ -1212,8 +816,6 @@ void loop() {
   }
 
   updateMPU();
-  manageWifi();
-  manageMqtt();
 
   // Stampa periodica ogni 500ms
   static uint32_t lastPrint = 0;
@@ -1233,12 +835,9 @@ void loop() {
   int16_t gz = (int16_t)(i2cBuf[22] | ((uint16_t)i2cBuf[23] << 8));
   Serial.printf("ACC  X:%.2f Y:%.2f Z:%.2f g\n",  ax/100.0, ay/100.0, az/100.0);
   Serial.printf("GYRO X:%.2f Y:%.2f Z:%.2f deg/s\n", gx/100.0, gy/100.0, gz/100.0);
-  Serial.printf("TCRT: SX:%s CEN:%s DX:%s (0x%02X) | WiFi:%s MQTT:%s Broker:%s\n",
-    (i2cBuf[24] & 0x01) ? "BIANCO" : "NERO ",
-    (i2cBuf[24] & 0x02) ? "BIANCO" : "NERO ", // Corretto: rimosso il punto interrogativo di troppo
-    (i2cBuf[24] & 0x04) ? "BIANCO" : "NERO ",
-    i2cBuf[24],
-    WiFi.isConnected() ? "OK" : "NO",
-    mqtt.connected()   ? "OK" : "NO",
-    mqttBroker);
+  Serial.printf("TCRT: SX:%s CEN:%s DX:%s (0x%02X)\n",
+    (i2cBuf[24] & 0x01) ? "NERO " : "BIANCO",
+    (i2cBuf[24] & 0x02) ? "NERO " : "BIANCO",
+    (i2cBuf[24] & 0x04) ? "NERO " : "BIANCO",
+    i2cBuf[24]);
 }

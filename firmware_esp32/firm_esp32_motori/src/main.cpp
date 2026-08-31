@@ -1,84 +1,42 @@
 /*
  * ================================================================
- *  ESP32 MOTORI — FIRMWARE OTTIMIZZATO + SICUREZZA ULTRASUONI
+ *  ESP32 MOTORI — FIRMWARE SOLO I2C (WiFi/MQTT rimossi)
  *  Latenza comando→motore: < 2ms (tipico) / < 5ms (peggiore)
  *
- *  OTTIMIZZAZIONI RISPETTO ALLA VERSIONE ORIGINALE:
+ *  Il Raspberry Pi è l'UNICO punto di comunicazione con l'esterno.
+ *  Questo ESP32 parla SOLO via I2C slave (0x08) col Pi — nessun WiFi,
+ *  nessun MQTT, nessuna gestione credenziali/broker. Tutto il traffico
+ *  verso controller esterni/dashboard passa dal Pi, che poi scrive
+ *  qui via I2C con lo stesso protocollo di sempre (opcode invariati).
+ *
+ *  ARCHITETTURA (invariata rispetto a prima, solo networking rimosso):
  *
  *  1. DUAL-CORE FreeRTOS
- *     - Core 0: WiFi + MQTT (non blocca mai i motori)
+ *     - Core 0: libero (nessun task di rete più necessario)
  *     - Core 1: Motori + Encoder + I2C + Seriale (real-time)
  *
  *  2. CODA COMANDI (xQueueSend/Receive)
  *     - I2C ISR → coda → task motori: latenza < 1ms
- *     - MQTT callback → coda → task motori: latenza < 2ms
  *     - Seriale → coda → task motori: latenza < 2ms
- *     - Nessun flag volatile + polling, nessuna race condition
  *
- *  3. SERIAL RIMOSSO DAL LOOP PRINCIPALE
- *     - readStringUntil() bloccante → task dedicato su Core 1
- *     - Non blocca più I2C né MQTT
- *
- *  4. STAMPA SERIALE ASINCRONA
- *     - Task separato ogni 500ms
- *     - Non rallenta MAI il path critico motori
- *
- *  5. ENCODER CON SPINLOCK
- *     - portENTER_CRITICAL / portEXIT_CRITICAL invece di
- *       noInterrupts/interrupts globali
- *     - Più safe su sistema multicore
- *
- *  6. MQTT loop() su Core 0 continuo
- *     - mqtt.loop() ogni ~10ms senza bloccare Core 1
- *
- *  7. buildTxBuf() chiamato solo quando necessario
- *     - Non più ad ogni iterazione del loop
- *
- *  8. SICUREZZA ULTRASUONI
+ *  3. SICUREZZA ULTRASUONI (invariata)
  *     - Il Raspberry invia periodicamente i dati sensori via I2C
- *       con comando 0xE0 seguito da 26 byte (intero i2cBuf dell'ESP32 sensori)
+ *       con comando 0xE0 seguito da 26 byte (buffer ESP32 sensori)
  *     - Se un sensore scende sotto la soglia DIST_SOGLIA_*, i movimenti
  *       nella direzione corrispondente vengono bloccati
- *     - Le soglie sono configurabili nella sezione ⚙️ qui sotto
- *     - Il blocco è per DIREZIONE, non globale
- *     - Layout sensori (stesso ordine del buffer i2cBuf esp32_sensori):
- *         [0-1]   FRONTE    → blocca: avanti, diag_avanti_dx, diag_avanti_sx
- *         [2-3]   RETRO     → blocca: indietro, diag_indietro_dx, diag_indietro_sx
- *         [4-5]   SINISTRA  → blocca: lat_sx, diag_avanti_sx, diag_indietro_sx
- *         [6-7]   DESTRA    → blocca: lat_dx, diag_avanti_dx, diag_indietro_dx
- *         [8-9]   CLIFF_F   → blocca: avanti (bordo/precipizio frontale)
- *         [10-11] CLIFF_R   → blocca: indietro (bordo/precipizio posteriore)
  *
  * ────────────────────────────────────────────────────────────────
  *  LATENZE ATTESE (misurate su ESP32 240MHz):
- *  I2C  → motore:  < 1ms
- *  MQTT → motore:  < 2ms
+ *  I2C     → motore: < 1ms
  *  Seriale → motore: < 2ms
  * ════════════════════════════════════════════════════════════════
  */
 
+#include <Arduino.h>
 #include <Wire.h>
-#include <WiFi.h>
-#include <ESPmDNS.h>
-#include <PubSubClient.h>
-#include <Preferences.h>
-#include <ArduinoJson.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-
-// ── CREDENZIALI DEFAULT ──────────────────────────────────────────
-#define WIFI_SSID_DEFAULT   "LAPTOP1234"
-#define WIFI_PASS_DEFAULT   "12345678"
-#define MQTT_BROKER_DEFAULT "LagmaBills"
-#define MQTT_PORT           1883
-#define MQTT_CLIENT_ID      "esp32_motori"
-
-// ── NVS ──────────────────────────────────────────────────────────
-#define NVS_NAMESPACE  "wifi_cfg"
-#define NVS_KEY_SSID   "ssid"
-#define NVS_KEY_PASS   "pass"
-#define NVS_KEY_BROKER "broker"
 
 // ── I2C slave ────────────────────────────────────────────────────
 #define I2C_SLAVE_ADDR  0x08
@@ -154,24 +112,15 @@
 #define CMD_QUEUE_SIZE 32
 
 // ════════════════════════════════════════════════════════════════
-//  TIPI — devono stare PRIMA di qualsiasi funzione che li usa
+//  TIPI
 // ════════════════════════════════════════════════════════════════
 
-// Direzioni per il controllo di sicurezza
 enum DirezioneCmd {
-  DIR_AVANTI,
-  DIR_INDIETRO,
-  DIR_SX,
-  DIR_DX,
-  DIR_DIAG_AVT_DX,
-  DIR_DIAG_AVT_SX,
-  DIR_DIAG_IND_DX,
-  DIR_DIAG_IND_SX,
-  DIR_RUOTA,
-  DIR_NESSUNA
+  DIR_AVANTI, DIR_INDIETRO, DIR_SX, DIR_DX,
+  DIR_DIAG_AVT_DX, DIR_DIAG_AVT_SX, DIR_DIAG_IND_DX, DIR_DIAG_IND_SX,
+  DIR_RUOTA, DIR_NESSUNA
 };
 
-// Tipi di comando
 enum CmdType : uint8_t {
   CMD_STOP = 0,
   CMD_AVANTI,
@@ -184,14 +133,13 @@ enum CmdType : uint8_t {
   CMD_DIAG_IND_SX,
   CMD_RUOTA_DX,
   CMD_RUOTA_SX,
-  CMD_SET_MOTORI,       // fl,fr,rl,rr in val[0..3]
-  CMD_MECANUM,          // vx=val[0], vy=val[1], vr=val[2]
-  CMD_GIRA_ANGOLO,      // gradi in valF, vel in val[0]
-  CMD_SET_VEL,          // velocità globale in val[0]
+  CMD_SET_MOTORI,
+  CMD_MECANUM,
+  CMD_GIRA_ANGOLO,
+  CMD_SET_VEL,
   CMD_RESET_ENC,
-  CMD_MOTOR_SINGLE,     // motore=val[0] (0=FL,1=FR,2=RL,3=RR), speed=val[1]
-  CMD_WIFI_CREDS,       // usa strBuf per ssid/pass/broker
-  CMD_SENSOR_DATA,      // dati sensori dal Pi: SENSOR_BUF_SIZE byte in strBuf
+  CMD_MOTOR_SINGLE,
+  CMD_SENSOR_DATA,      // dati sensori dal Pi via I2C 0xE0
 };
 
 struct MotorCmd {
@@ -221,18 +169,7 @@ const long TICKS_PER_360 = 1200;
 #define TX_BUF_SIZE 28
 volatile uint8_t txBuf[TX_BUF_SIZE];
 
-// ── DATI SENSORI RICEVUTI DAL RASPBERRY ──────────────────────────
-// Aggiornati dal Raspberry via I2C comando 0xE0 + 26 byte
-// Stesso layout di i2cBuf dell'ESP32 sensori:
-//   [0-1]   FRONTE    uint16 LE (cm, 9999=fuori portata)
-//   [2-3]   RETRO     uint16 LE
-//   [4-5]   SINISTRA  uint16 LE
-//   [6-7]   DESTRA    uint16 LE
-//   [8-9]   CLIFF_F   uint16 LE
-//   [10-11] CLIFF_R   uint16 LE
-//   [12-23] IMU (ax,ay,az,gx,gy,gz) int16 LE (×100)
-//   [24]    TCRT mask (bit0=sx, bit1=cen, bit2=dx)
-//   [25]    riservato
+// ── DATI SENSORI RICEVUTI DAL RASPBERRY (via I2C, non WiFi) ──────
 #define SENSOR_BUF_SIZE 26
 volatile uint8_t  sensorBuf[SENSOR_BUF_SIZE];
 volatile uint32_t lastSensorUpdateMs = 0;
@@ -241,20 +178,8 @@ volatile bool     sensorDataValid    = false;
 // ── HANDLE RTOS ──────────────────────────────────────────────────
 QueueHandle_t cmdQueue;
 TaskHandle_t  motorTaskHandle  = nullptr;
-TaskHandle_t  netTaskHandle    = nullptr;
 TaskHandle_t  serialTaskHandle = nullptr;
 TaskHandle_t  printTaskHandle  = nullptr;
-
-// ── WiFi / MQTT ──────────────────────────────────────────────────
-WiFiClient   wifiClient;
-PubSubClient mqtt(wifiClient);
-Preferences  prefs;
-
-char wifiSsid[64];
-char wifiPass[64];
-char mqttBroker[64];
-
-volatile bool wifiReconnectRequest = false;
 
 // ════════════════════════════════════════════════════════════════
 //  PROTOTIPI
@@ -277,9 +202,6 @@ void giraDiAngolo(float gradi, int vel);
 void buildTxBuf();
 void eseguiCmd(const MotorCmd& cmd);
 void sendCmd(CmdType type, int v0=0, int v1=0, int v2=0, int v3=0, float f=0);
-void loadCredentials();
-void saveCredentials(const char* ssid, const char* pass, const char* broker);
-void publishStato();
 void printHelp();
 void printEncoder();
 void printStato();
@@ -291,8 +213,6 @@ bool isDirezioneBlocata(DirezioneCmd dir);
 //  SICUREZZA ULTRASUONI — lettura buffer e logica blocco
 // ════════════════════════════════════════════════════════════════
 
-// Legge una distanza uint16 LE dal buffer sensori (thread-safe)
-// idx: 0=FRONTE, 1=RETRO, 2=SINISTRA, 3=DESTRA, 4=CLIFF_F, 5=CLIFF_R
 inline uint16_t getSensorDist(int idx) {
   int o = idx * 2;
   portENTER_CRITICAL(&sensorMux);
@@ -301,14 +221,12 @@ inline uint16_t getSensorDist(int idx) {
   return v;
 }
 
-// Controlla se una singola distanza è sotto soglia (e valida)
 inline bool distanzaBloccante(uint16_t dist, uint16_t soglia) {
-  if (soglia == 0)    return false;   // soglia disabilitata
-  if (dist == 9999)   return false;   // fuori portata = libero
+  if (soglia == 0)    return false;
+  if (dist == 9999)   return false;
   return dist < soglia;
 }
 
-// Restituisce true se la direzione è BLOCCATA da un sensore
 bool isDirezioneBlocata(DirezioneCmd dir) {
   if (SENSOR_DATA_TIMEOUT_MS > 0) {
     uint32_t now = millis();
@@ -317,7 +235,7 @@ bool isDirezioneBlocata(DirezioneCmd dir) {
     uint32_t lastUpd = lastSensorUpdateMs;
     portEXIT_CRITICAL(&sensorMux);
     if (!valido || (now - lastUpd) > SENSOR_DATA_TIMEOUT_MS) {
-      return true;  // dati scaduti: blocca per sicurezza
+      return true;
     }
   }
 
@@ -351,7 +269,7 @@ bool isDirezioneBlocata(DirezioneCmd dir) {
 }
 
 // ════════════════════════════════════════════════════════════════
-//  HELPER — invio comando alla coda (safe da qualsiasi contesto)
+//  HELPER — invio comando alla coda
 // ════════════════════════════════════════════════════════════════
 
 inline void sendCmd(CmdType type, int v0, int v1, int v2, int v3, float f) {
@@ -363,64 +281,6 @@ inline void sendCmd(CmdType type, int v0, int v1, int v2, int v3, float f) {
   cmd.val[3] = (int16_t)v3;
   cmd.valF   = f;
   xQueueSend(cmdQueue, &cmd, 0);
-}
-
-void sendWifiCreds(const char* ssid, const char* pass, const char* broker) {
-  MotorCmd cmd = {};
-  cmd.type = CMD_WIFI_CREDS;
-  int idx = 0;
-  auto pack = [&](const char* s) {
-    int l = s ? strlen(s) : 0;
-    if (l > 63) l = 63;
-    cmd.strBuf[idx++] = (char)l;
-    if (l > 0) { memcpy(cmd.strBuf + idx, s, l); idx += l; }
-  };
-  pack(ssid); pack(pass); pack(broker);
-  xQueueSend(cmdQueue, &cmd, 0);
-}
-
-// ════════════════════════════════════════════════════════════════
-//  NVS
-// ════════════════════════════════════════════════════════════════
-
-void loadCredentials() {
-  prefs.begin(NVS_NAMESPACE, true);
-  String ssid   = prefs.getString(NVS_KEY_SSID,   WIFI_SSID_DEFAULT);
-  String pass   = prefs.getString(NVS_KEY_PASS,   WIFI_PASS_DEFAULT);
-  String broker = prefs.getString(NVS_KEY_BROKER, MQTT_BROKER_DEFAULT);
-  prefs.end();
-  ssid.toCharArray(wifiSsid,     sizeof(wifiSsid));
-  pass.toCharArray(wifiPass,     sizeof(wifiPass));
-  broker.toCharArray(mqttBroker, sizeof(mqttBroker));
-}
-
-void saveCredentials(const char* ssid, const char* pass, const char* broker) {
-  prefs.begin(NVS_NAMESPACE, false);
-  if (ssid   && ssid[0])   prefs.putString(NVS_KEY_SSID,   ssid);
-  if (pass   && pass[0])   prefs.putString(NVS_KEY_PASS,   pass);
-  if (broker && broker[0]) prefs.putString(NVS_KEY_BROKER, broker);
-  prefs.end();
-}
-
-// ════════════════════════════════════════════════════════════════
-//  mDNS
-// ════════════════════════════════════════════════════════════════
-
-void resolveBroker() {
-  const char* host = MQTT_BROKER_DEFAULT;
-  MDNS.begin("esp32-motori");
-  Serial.printf("[mDNS] Risoluzione %s.local...\n", host);
-  IPAddress ip = MDNS.queryHost(host, 3000);
-  if (ip != INADDR_NONE) {
-    String ipStr = ip.toString();
-    ipStr.toCharArray(mqttBroker, sizeof(mqttBroker));
-    Serial.printf("[mDNS] Trovato: %s\n", mqttBroker);
-    prefs.begin(NVS_NAMESPACE, false);
-    prefs.putString(NVS_KEY_BROKER, ipStr);
-    prefs.end();
-  } else {
-    Serial.printf("[mDNS] Non trovato, uso NVS fallback: %s\n", mqttBroker);
-  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -487,9 +347,8 @@ void setMotoriCorrected(int fl, int fr, int rl, int rr) {
   setMotori(-fl, fr, -rl, rr);
 }
 
-void fermati() { setMotori(0,0,0,0); statoMotori=0; buildTxBuf(); }  // ← aggiungi questa
+void fermati() { setMotori(0,0,0,0); statoMotori=0; buildTxBuf(); }
 
-// ── SOSTITUISCI le funzioni di movimento ─────────────────────────
 void avanti(int v)         { setMotoriCorrected( v, v, v, v);   statoMotori=1; buildTxBuf(); }
 void indietro(int v)       { setMotoriCorrected(-v,-v,-v,-v);   statoMotori=1; buildTxBuf(); }
 void lateraleDx(int v)  { setMotoriCorrected( v,-v,-v, v);  statoMotori=1; buildTxBuf(); }
@@ -506,7 +365,7 @@ void mecanumDrive(int vx, int vy, int vr) {
   int rl = vy-vx+vr, rr = vy+vx-vr;
   int mx = max({abs(fl),abs(fr),abs(rl),abs(rr)});
   if (mx > 255) { fl=fl*255/mx; fr=fr*255/mx; rl=rl*255/mx; rr=rr*255/mx; }
-  setMotoriCorrected(fl,fr,rl,rr);   // ← corretto
+  setMotoriCorrected(fl,fr,rl,rr);
   statoMotori = 1;
   buildTxBuf();
 }
@@ -569,7 +428,7 @@ void buildTxBuf() {
 }
 
 // ════════════════════════════════════════════════════════════════
-//  ESEGUI COMANDO DAL QUEUE (solo nel task motori → nessuna race)
+//  ESEGUI COMANDO DAL QUEUE
 // ════════════════════════════════════════════════════════════════
 
 void eseguiCmd(const MotorCmd& c) {
@@ -639,7 +498,6 @@ void eseguiCmd(const MotorCmd& c) {
 
     case CMD_SET_MOTORI: {
       int fl = c.val[0], fr = c.val[1], rl = c.val[2], rr = c.val[3];
-      // Stima componente avanti/retro e laterale
       int vy = (fl + fr + rl + rr) / 4;
       int vx = (-fl + fr + rl - rr) / 4;
       bool blocked = false;
@@ -687,27 +545,7 @@ void eseguiCmd(const MotorCmd& c) {
       break;
     }
 
-    case CMD_WIFI_CREDS: {
-      const char* buf = c.strBuf;
-      int idx = 0;
-      char newSsid[64]={}, newPass[64]={}, newBroker[64]={};
-      auto unpack = [&](char* dst, int maxLen) {
-        int l = (uint8_t)buf[idx++];
-        if (l > 0) { memcpy(dst, buf+idx, min(l,maxLen-1)); idx += l; }
-      };
-      unpack(newSsid,   sizeof(newSsid));
-      unpack(newPass,   sizeof(newPass));
-      unpack(newBroker, sizeof(newBroker));
-      saveCredentials(newSsid, newPass, newBroker);
-      if (newSsid[0])   strncpy(wifiSsid,   newSsid,   sizeof(wifiSsid));
-      if (newPass[0])   strncpy(wifiPass,   newPass,   sizeof(wifiPass));
-      if (newBroker[0]) strncpy(mqttBroker, newBroker, sizeof(mqttBroker));
-      wifiReconnectRequest = true;
-      break;
-    }
-
     case CMD_SENSOR_DATA: {
-      // Aggiorna il buffer sensori con i dati ricevuti dal Pi
       portENTER_CRITICAL(&sensorMux);
       memcpy((void*)sensorBuf, c.strBuf, SENSOR_BUF_SIZE);
       lastSensorUpdateMs = millis();
@@ -719,7 +557,7 @@ void eseguiCmd(const MotorCmd& c) {
 }
 
 // ════════════════════════════════════════════════════════════════
-//  I2C SLAVE CALLBACKS
+//  I2C SLAVE CALLBACKS — UNICO canale di comunicazione col Pi
 // ════════════════════════════════════════════════════════════════
 
 void onRequest() {
@@ -738,57 +576,12 @@ void onReceive(int n) {
 
   uint8_t cmd = rxBuf[0];
 
-  // ── 0xE0 — dati sensori dal Raspberry (26 byte = i2cBuf completo) ──
+  // ── 0xE0 — dati sensori dal Raspberry (26 byte = buffer sensori) ──
   if (cmd == 0xE0) {
-    if (rxLen < (1 + SENSOR_BUF_SIZE)) return;  // pacchetto incompleto
+    if (rxLen < (1 + SENSOR_BUF_SIZE)) return;
     MotorCmd mc = {};
     mc.type = CMD_SENSOR_DATA;
     memcpy(mc.strBuf, rxBuf + 1, SENSOR_BUF_SIZE);
-    xQueueSendFromISR(cmdQueue, &mc, nullptr);
-    return;
-  }
-
-  // ── Credenziali WiFi (0xFD / 0xFE) ──────────────────────────────
-  if (cmd == 0xFD && rxLen >= 4) {
-    MotorCmd mc = {};
-    mc.type = CMD_WIFI_CREDS;
-    uint8_t lenIp = rxBuf[1];
-    char broker[64]={}, ssid[64]={}, pass[64]={};
-    memcpy(broker, rxBuf+2, min((int)lenIp, 63));
-    int idx = 2+lenIp;
-    if (idx < rxLen) {
-      uint8_t ls = rxBuf[idx++];
-      memcpy(ssid, rxBuf+idx, min((int)ls, 63)); idx+=ls;
-      if (idx < rxLen) {
-        uint8_t lp = rxBuf[idx++];
-        memcpy(pass, rxBuf+idx, min((int)lp, 63));
-      }
-    }
-    int bi = 0;
-    auto pack = [&](const char* s) {
-      int l = strlen(s); if(l>63) l=63;
-      mc.strBuf[bi++]=(char)l;
-      memcpy(mc.strBuf+bi, s, l); bi+=l;
-    };
-    pack(ssid); pack(pass); pack(broker);
-    xQueueSendFromISR(cmdQueue, &mc, nullptr);
-    return;
-  }
-  if (cmd == 0xFE && rxLen >= 4) {
-    MotorCmd mc = {};
-    mc.type = CMD_WIFI_CREDS;
-    char ssid[64]={}, pass[64]={};
-    uint8_t ls = rxBuf[1];
-    memcpy(ssid, rxBuf+2, min((int)ls, 63));
-    uint8_t lp = rxBuf[2+ls];
-    memcpy(pass, rxBuf+3+ls, min((int)lp, 63));
-    int bi = 0;
-    auto pack = [&](const char* s) {
-      int l = strlen(s); if(l>63) l=63;
-      mc.strBuf[bi++]=(char)l;
-      memcpy(mc.strBuf+bi, s, l); bi+=l;
-    };
-    pack(ssid); pack(pass); pack("");
     xQueueSendFromISR(cmdQueue, &mc, nullptr);
     return;
   }
@@ -829,90 +622,6 @@ void onReceive(int n) {
 }
 
 // ════════════════════════════════════════════════════════════════
-//  MQTT CALLBACK
-// ════════════════════════════════════════════════════════════════
-
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  char msg[128];
-  if (length >= sizeof(msg)) return;
-  memcpy(msg, payload, length);
-  msg[length] = '\0';
-
-  StaticJsonDocument<128> doc;
-  if (deserializeJson(doc, msg)) return;
-  const char* cmd = doc["cmd"];
-  if (!cmd) return;
-
-  struct { const char* name; CmdType type; } presets[] = {
-    {"avanti",            CMD_AVANTI},
-    {"indietro",          CMD_INDIETRO},
-    {"sinistra",          CMD_LAT_SX},
-    {"destra",            CMD_LAT_DX},
-    {"ruota_dx",          CMD_RUOTA_DX},
-    {"ruota_sx",          CMD_RUOTA_SX},
-    {"stop",              CMD_STOP},
-    {"diag_avanti_dx",    CMD_DIAG_AVT_DX},
-    {"diag_avanti_sx",    CMD_DIAG_AVT_SX},
-    {"diag_indietro_dx",  CMD_DIAG_IND_DX},
-    {"diag_indietro_sx",  CMD_DIAG_IND_SX},
-  };
-  for (auto& p : presets) {
-    if (strcmp(cmd, p.name) == 0) { sendCmd(p.type); return; }
-  }
-
-  if (strcmp(cmd,"velocita")==0)  { sendCmd(CMD_SET_VEL, (int)(doc["val"]|velocita)); return; }
-  if (strcmp(cmd,"reset_enc")==0) { sendCmd(CMD_RESET_ENC); return; }
-  if (strcmp(cmd,"mecanum")==0)   { sendCmd(CMD_MECANUM, (int)(doc["vx"]|0), (int)(doc["vy"]|0), (int)(doc["vr"]|0)); return; }
-
-  auto singleMotor = [&](int idx) {
-    MotorCmd mc={};
-    mc.type=CMD_MOTOR_SINGLE;
-    mc.val[0]=idx;
-    mc.val[1]=constrain((int)(doc["val"]|0),-255,255);
-    xQueueSend(cmdQueue,&mc,0);
-  };
-  if (strcmp(cmd,"fl")==0) { singleMotor(0); return; }
-  if (strcmp(cmd,"fr")==0) { singleMotor(1); return; }
-  if (strcmp(cmd,"rl")==0) { singleMotor(2); return; }
-  if (strcmp(cmd,"rr")==0) { singleMotor(3); return; }
-
-  if (strcmp(cmd,"sx")==0)   { int v=constrain((int)(doc["val"]|0),-255,255); sendCmd(CMD_SET_MOTORI,v,velFR,v,velRR); return; }
-  if (strcmp(cmd,"dx")==0)   { int v=constrain((int)(doc["val"]|0),-255,255); sendCmd(CMD_SET_MOTORI,velFL,v,velRL,v); return; }
-  if (strcmp(cmd,"ant")==0)  { int v=constrain((int)(doc["val"]|0),-255,255); sendCmd(CMD_SET_MOTORI,v,v,velRL,velRR); return; }
-  if (strcmp(cmd,"post")==0) { int v=constrain((int)(doc["val"]|0),-255,255); sendCmd(CMD_SET_MOTORI,velFL,velFR,v,v); return; }
-  if (strcmp(cmd,"diag1")==0){ int v=constrain((int)(doc["val"]|0),-255,255); sendCmd(CMD_SET_MOTORI,v,velFR,velRL,v); return; }
-  if (strcmp(cmd,"diag2")==0){ int v=constrain((int)(doc["val"]|0),-255,255); sendCmd(CMD_SET_MOTORI,velFL,v,v,velRR); return; }
-  if (strcmp(cmd,"tutti")==0){ int v=constrain((int)(doc["val"]|0),-255,255); sendCmd(CMD_SET_MOTORI,v,v,v,v); return; }
-  if (strcmp(cmd,"set")==0) {
-    sendCmd(CMD_SET_MOTORI,
-      constrain((int)(doc["fl"]|0),-255,255),
-      constrain((int)(doc["fr"]|0),-255,255),
-      constrain((int)(doc["rl"]|0),-255,255),
-      constrain((int)(doc["rr"]|0),-255,255));
-    return;
-  }
-}
-
-// ════════════════════════════════════════════════════════════════
-//  MQTT — publish stato
-// ════════════════════════════════════════════════════════════════
-
-void publishStato() {
-  if (!mqtt.connected()) return;
-  long fl, fr, rl, rr;
-  portENTER_CRITICAL(&encMux);
-  fl=encoderFL; fr=encoderFR; rl=encoderRL; rr=encoderRR;
-  portEXIT_CRITICAL(&encMux);
-  char buf[200];
-  snprintf(buf, sizeof(buf),
-    "{\"online\":true,\"fl\":%ld,\"fr\":%ld,\"rl\":%ld,\"rr\":%ld,"
-    "\"vel\":%d,\"stato\":%d,"
-    "\"vfl\":%d,\"vfr\":%d,\"vrl\":%d,\"vrr\":%d}",
-    fl,fr,rl,rr,velocita,(int)statoMotori,velFL,velFR,velRL,velRR);
-  mqtt.publish("robot/motori/stato", buf);
-}
-
-// ════════════════════════════════════════════════════════════════
 //  TASK: MOTORI — Core 1, priorità alta
 // ════════════════════════════════════════════════════════════════
 
@@ -927,63 +636,7 @@ void taskMotori(void* pvParameters) {
 }
 
 // ════════════════════════════════════════════════════════════════
-//  TASK: RETE — Core 0, priorità normale
-// ════════════════════════════════════════════════════════════════
-
-void taskRete(void* pvParameters) {
-  loadCredentials();
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(wifiSsid, wifiPass);
-  { uint32_t t = millis(); while (!WiFi.isConnected() && (millis()-t)<10000) vTaskDelay(pdMS_TO_TICKS(200)); }
-  if (WiFi.isConnected()) resolveBroker();
-  mqtt.setServer(mqttBroker, MQTT_PORT);
-  mqtt.setCallback(mqttCallback);
-  mqtt.setKeepAlive(15);
-
-  uint32_t lastWifiCheck   = 0;
-  uint32_t lastMqttCheck   = 0;
-  uint32_t lastMqttPublish = 0;
-
-  for (;;) {
-    uint32_t now = millis();
-    if (wifiReconnectRequest) {
-      wifiReconnectRequest = false;
-      WiFi.disconnect(true);
-      vTaskDelay(pdMS_TO_TICKS(200));
-      WiFi.begin(wifiSsid, wifiPass);
-      mqtt.setServer(mqttBroker, MQTT_PORT);
-    }
-    if ((now - lastWifiCheck) >= 5000) {
-      lastWifiCheck = now;
-      if (!WiFi.isConnected()) WiFi.reconnect();
-    }
-    if (WiFi.isConnected()) {
-      if (!mqtt.connected()) {
-        if ((now - lastMqttCheck) >= 5000) {
-          lastMqttCheck = now;
-          resolveBroker();
-          mqtt.setServer(mqttBroker, MQTT_PORT);
-          const char* lwtPayload = "{\"online\":false}";
-          if (mqtt.connect(MQTT_CLIENT_ID, nullptr,nullptr,
-                           "robot/motori/stato",0,true,lwtPayload)) {
-            mqtt.subscribe("robot/motori/cmd");
-            mqtt.publish("robot/motori/log","esp32_motori online");
-          }
-        }
-      } else {
-        mqtt.loop();
-        if ((now - lastMqttPublish) >= 500) {
-          lastMqttPublish = now;
-          publishStato();
-        }
-      }
-    }
-    vTaskDelay(pdMS_TO_TICKS(10));
-  }
-}
-
-// ════════════════════════════════════════════════════════════════
-//  TASK: SERIALE — Core 1, priorità bassa
+//  TASK: SERIALE — Core 1, priorità bassa (debug via USB)
 // ════════════════════════════════════════════════════════════════
 
 void printHelp() {
@@ -1017,14 +670,11 @@ void printStato() {
     statoMotori==0?"STOP": statoMotori==1?"IN MOVIMENTO":"ROTAZIONE PRECISA");
   Serial.printf("PWM (FL FR RL RR) : %d  %d  %d  %d\n",velFL,velFR,velRL,velRR);
   Serial.printf("Encoder           : FL=%ld  FR=%ld  RL=%ld  RR=%ld\n",fl,fr,rl,rr);
-  Serial.printf("WiFi   : %s\n", WiFi.isConnected()?WiFi.localIP().toString().c_str():"DISCONNESSO");
-  Serial.printf("MQTT   : %s  broker=%s\n", mqtt.connected()?"OK":"DISCONNESSO", mqttBroker);
-  // Stato sensori
   portENTER_CRITICAL(&sensorMux);
   bool valido = sensorDataValid;
   uint32_t lastUpd = lastSensorUpdateMs;
   portEXIT_CRITICAL(&sensorMux);
-  Serial.printf("Sensori: %s (ultimo aggiornamento: %lums fa)\n",
+  Serial.printf("Sensori (via I2C dal Pi): %s (ultimo aggiornamento: %lums fa)\n",
     valido ? "VALIDI" : "NON RICEVUTI",
     valido ? (uint32_t)(millis() - lastUpd) : 0UL);
   if (valido) {
@@ -1111,12 +761,9 @@ void taskStampa(void* pvParameters) {
     fl=encoderFL; fr=encoderFR; rl=encoderRL; rr=encoderRR;
     portEXIT_CRITICAL(&encMux);
     Serial.printf(
-      "ENC FL:%ld FR:%ld RL:%ld RR:%ld | PWM FL:%d FR:%d RL:%d RR:%d | "
-      "Vel:%d St:%d | WiFi:%s MQTT:%s\n",
+      "ENC FL:%ld FR:%ld RL:%ld RR:%ld | PWM FL:%d FR:%d RL:%d RR:%d | Vel:%d St:%d\n",
       fl,fr,rl,rr,velFL,velFR,velRL,velRR,
-      velocita,statoMotori,
-      WiFi.isConnected()?"OK":"NO",
-      mqtt.connected()  ?"OK":"NO");
+      velocita,statoMotori);
   }
 }
 
@@ -1126,7 +773,7 @@ void taskStampa(void* pvParameters) {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("== ESP32 Motori Mecanum — OTTIMIZZATO FreeRTOS + SICUREZZA ULTRASUONI ==");
+  Serial.println("== ESP32 Motori Mecanum — SOLO I2C (WiFi/MQTT rimossi) ==");
 
   int dirPins[] = {FL_IN1,FL_IN2,FR_IN1,FR_IN2,RL_IN1,RL_IN2,RR_IN1,RR_IN2,STBY};
   for (int p : dirPins) { pinMode(p, OUTPUT); digitalWrite(p, LOW); }
@@ -1160,7 +807,6 @@ void setup() {
   fermati();
 
   xTaskCreatePinnedToCore(taskMotori,  "Motori",  4096, nullptr, 5, &motorTaskHandle,  1);
-  xTaskCreatePinnedToCore(taskRete,    "Rete",    8192, nullptr, 3, &netTaskHandle,    0);
   xTaskCreatePinnedToCore(taskSeriale, "Seriale", 4096, nullptr, 2, &serialTaskHandle, 1);
   xTaskCreatePinnedToCore(taskStampa,  "Stampa",  2048, nullptr, 1, &printTaskHandle,  1);
 
@@ -1169,10 +815,11 @@ void setup() {
     DIST_SOGLIA_FRONTE, DIST_SOGLIA_RETRO, DIST_SOGLIA_SINISTRA,
     DIST_SOGLIA_DESTRA, DIST_SOGLIA_CLIFF_F, DIST_SOGLIA_CLIFF_R);
   Serial.printf("Timeout sensori: %dms\n", SENSOR_DATA_TIMEOUT_MS);
+  Serial.println("Comunicazione: SOLO I2C 0x08 col Raspberry Pi. Nessun WiFi/MQTT.");
 }
 
 // ════════════════════════════════════════════════════════════════
-//  LOOP — praticamente vuoto: tutto è nei task FreeRTOS
+//  LOOP — vuoto, tutto è nei task FreeRTOS
 // ════════════════════════════════════════════════════════════════
 
 void loop() {
