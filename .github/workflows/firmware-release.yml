@@ -14,12 +14,12 @@ jobs:
 
       - name: Crea zip firmware motori
         run: |
-          cd firmware/firm_esp32_motori
+          cd firmware_esp32/firm_esp32_motori
           zip -r ../../firm_esp32_motori.zip . -x ".pio/*" -x ".vscode/*"
 
       - name: Crea zip firmware sensori
         run: |
-          cd firmware/firm_esp32_sensori
+          cd firmware_esp32/firm_esp32_sensori
           zip -r ../../firm_esp32_sensori.zip . -x ".pio/*" -x ".vscode/*"
 
       - name: Pubblica/aggiorna release
