@@ -2,10 +2,18 @@
 """
 mqttMedia.py — LagmaBills
 Gestisce riproduzione audio, video e immagini via MQTT con debug avanzato.
+
+AGGIUNTA: quando un video finisce di essere riprodotto (naturalmente,
+non per uno stop manuale), viene pubblicato un evento su
+pi/video/finished con il nome del file appena terminato — usato da
+xboxPiDirect.py per concatenare un audio dopo un video (es. modalità
+"generale": video → poi audio).
 """
 
 import os
 import json
+import time
+import threading
 import subprocess
 import paho.mqtt.client as mqtt
 
@@ -19,13 +27,15 @@ STEREO_MAC    = "DD:23:A5:42:C3:92"
 TOPIC_AUDIO_MUSIC_LIST = "pi/audio/sounds/list"
 TOPIC_AUDIO_SFX_LIST   = "pi/audio/sfx/list"
 
-TOPIC_AUDIO_PLAY    = "pi/audio/play"
-TOPIC_AUDIO_STOP    = "pi/audio/stop"
-TOPIC_AUDIO_VOLUME  = "pi/audio/volume"
-TOPIC_AUDIO_REFRESH = "pi/audio/refresh"
-TOPIC_VIDEO_PLAY    = "pi/video/play"
-TOPIC_VIDEO_STOP    = "pi/video/stop"
-TOPIC_VIDEO_LIST    = "pi/video/list"
+TOPIC_AUDIO_PLAY     = "pi/audio/play"
+TOPIC_AUDIO_STOP     = "pi/audio/stop"
+TOPIC_AUDIO_VOLUME   = "pi/audio/volume"
+TOPIC_AUDIO_REFRESH  = "pi/audio/refresh"
+TOPIC_VIDEO_PLAY     = "pi/video/play"
+TOPIC_VIDEO_STOP     = "pi/video/stop"
+TOPIC_VIDEO_LIST     = "pi/video/list"
+TOPIC_VIDEO_FINISHED = "pi/video/finished"   # pubblicato a fine riproduzione
+TOPIC_FACCIA_CMD      = "robot/faccia/cmd"    # "pausa" | "riprendi" — HIM.py ascolta
 
 VIDEO_EXTENSIONS = (".mp4", ".mkv", ".avi", ".mov", ".webm")
 AUDIO_EXTENSIONS = (".mp3", ".wav", ".ogg", ".flac", ".m4a", ".opus", ".aiff", ".aac")
@@ -33,6 +43,8 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp")
 
 # ── STATO GLOBALE ────────────────────────────────────────────────
 current_proc = None
+_client_ref  = None   # riferimento al client MQTT, usato per publish da thread esterni
+_stop_richiesto = False   # True se l'ultimo stop è stato manuale (evita falso "finished")
 
 # ── BLUETOOTH & AUDIO DIAGNOSTIC ─────────────────────────────────
 
@@ -107,10 +119,11 @@ def publish_video_list(client):
 # ── PLAYBACK ─────────────────────────────────────────────────────
 
 def stop_playback():
-    global current_proc
+    global current_proc, _stop_richiesto
     if current_proc is None:
         return
-    
+
+    _stop_richiesto = True   # segna che questo stop è manuale, non fine naturale
     print("[STOP] Interrompo la riproduzione corrente...")
     if current_proc.poll() is None:
         current_proc.terminate()
@@ -135,10 +148,15 @@ def _mpv_audio_cmd(filepath: str, audio_device: str) -> list:
 
 def _mpv_video_cmd(filepath: str, audio_device: str) -> list:
     # NOTA: se dà errore video, prova a rimuovere '--drm-connector=HDMI-A-1'
+    # --hwdec=auto usa il decoder hardware V4L2 M2M del Pi 4 invece della
+    # CPU: senza questo flag mpv decodifica via software, causando lo
+    # spike di CPU e i lag audio/video su file H.264/H.265 di risoluzione
+    # media-alta.
     return [
         "mpv",
         "--vo=drm",
         "--drm-connector=HDMI-A-1",
+        "--hwdec=auto",
         f"--audio-device={audio_device}",
         "--no-terminal",
         filepath,
@@ -155,32 +173,63 @@ def _mpv_image_cmd(filepath: str, duration: int = 10) -> list:
     ]
 
 def play_audio(filepath: str):
-    global current_proc
+    global current_proc, _stop_richiesto
     stop_playback()
-    
+    _stop_richiesto = False
+
     audio_device = check_audio_status()
     cmd = _mpv_audio_cmd(filepath, audio_device)
-    
+
     print(f"[AUDIO] Avvio: {os.path.basename(filepath)} su {audio_device}")
-    # ATTENZIONE: Lasciamo visibili gli errori di mpv sul terminale per fare debug!
     current_proc = subprocess.Popen(cmd)
+
+def _watch_video_end(proc: subprocess.Popen, nome_file: str):
+    """
+    Gira in un thread separato: aspetta che il processo mpv del video
+    termini (naturalmente o per stop manuale). In entrambi i casi
+    la faccia va fatta ripartire — il carico CPU/GPU del video è finito.
+    Se la fine è naturale (non stop manuale), pubblica anche 'finished'
+    con il nome del file, usato per concatenare audio dopo un video
+    (es. modalità 'generale').
+    """
+    proc.wait()
+
+    if _client_ref is not None:
+        _client_ref.publish(TOPIC_FACCIA_CMD, "riprendi")
+        print("[FACCIA] Video terminato → richiesta ripresa animazione")
+
+    if not _stop_richiesto and _client_ref is not None:
+        _client_ref.publish(TOPIC_VIDEO_FINISHED, nome_file)
+        print(f"[VIDEO] Terminato naturalmente: {nome_file} → evento 'finished' pubblicato")
 
 def play_video(filepath: str):
-    global current_proc
+    global current_proc, _stop_richiesto
     stop_playback()
-    
+    _stop_richiesto = False
+
+    # La faccia (RoboEyes su X server) e il video competono per CPU/GPU
+    # sul Pi: fermarla durante la riproduzione evita lag/artefatti.
+    # Viene fatta ripartire automaticamente da _watch_video_end() a fine video.
+    if _client_ref is not None:
+        _client_ref.publish(TOPIC_FACCIA_CMD, "pausa")
+        print("[FACCIA] Video in arrivo → richiesta pausa animazione")
+        time.sleep(0.3)   # piccolo margine perché HIM.py chiuda la X prima di aprirne un'altra
+
     audio_device = check_audio_status()
     cmd = _mpv_video_cmd(filepath, audio_device)
-    
+
     print(f"[VIDEO] Avvio video: {os.path.basename(filepath)}")
     print(f"[DEBUG EXEC] Comando eseguito: {' '.join(cmd)}")
-    # ATTENZIONE: Se mpv crasha per i permessi video, qui vedrai l'errore esatto!
     current_proc = subprocess.Popen(cmd)
 
+    nome_file = os.path.basename(filepath)
+    threading.Thread(target=_watch_video_end, args=(current_proc, nome_file), daemon=True).start()
+
 def play_image(filepath: str, duration: int = 10):
-    global current_proc
+    global current_proc, _stop_richiesto
     stop_playback()
-    
+    _stop_richiesto = False
+
     cmd = _mpv_image_cmd(filepath, duration)
     print(f"[IMAGE] Avvio immagine: {os.path.basename(filepath)} per {duration}s")
     current_proc = subprocess.Popen(cmd)
@@ -230,7 +279,6 @@ def on_message(client, userdata, msg):
     elif topic == TOPIC_AUDIO_VOLUME:
         try:
             vol = max(0, min(100, int(payload)))
-            # Nota: wpctl lavora sul server audio corrente dell'utente loggato
             subprocess.run(
                 ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", str(vol / 100.0)],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
@@ -271,10 +319,12 @@ def on_message(client, userdata, msg):
 # ── MAIN ─────────────────────────────────────────────────────────
 
 def main():
+    global _client_ref
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="audio_video_player")
     client.on_connect = on_connect
     client.on_message = on_message
-    
+    _client_ref = client
+
     print(f"[START] Connessione in corso al broker {MQTT_BROKER}...")
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     client.loop_forever()
