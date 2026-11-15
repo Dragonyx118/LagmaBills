@@ -42,7 +42,7 @@ def avvia_generale():
     avvia_comando(["python3", os.path.expanduser("~/FUSION/streamCamera.py")])
     avvia_comando(["python3", os.path.expanduser("~/FUSION/testI2C.py")])
     avvia_comando(
-        "startx /usr/bin/python3 /home/ladrodirame/AIsburra/TUFF/main.py -- :0 vt1",
+        "startx /usr/bin/python3 /home/ladrodirame/FUSION/main.py -- :0 vt1",
         shell=True
     )
 
