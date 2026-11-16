@@ -50,6 +50,7 @@ from .newsticker import NewstickerSequenceMixin
 from .slot import SlotSequenceMixin
 from .ultrakill import UltrakillSequenceMixin
 from .wakeword import WakewordSequenceMixin
+from .mode_preview import ModePreviewMixin
 
 # Tutte le mixin delle sequenze, da aggiungere all'ereditarietà di
 # RoboEyes in main.py (comodo per non dimenticarne una).
@@ -63,6 +64,7 @@ ALL_SEQUENCE_MIXINS = [
     HackerSequenceMixin, WeatherSequenceMixin, AmongusSequenceMixin,
     NewstickerSequenceMixin, SlotSequenceMixin, UltrakillSequenceMixin,
     WakewordSequenceMixin,
+    ModePreviewMixin,   # overlay anteprima modalità, non è una SEQ_* vera e propria
 ]
 
 # costante SEQ_* -> nome del metodo che la gestisce

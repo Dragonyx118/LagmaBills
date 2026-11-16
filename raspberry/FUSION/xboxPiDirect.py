@@ -6,17 +6,8 @@ nessun PC in mezzo. Comandi motori inviati via UDP loopback allo
 stesso listener attivo in testI2C.py (porta 5566).
 
 REQUISITO: controller già "paired + trusted" una volta sola
-(vedi PAIRING_xbox_bluetooth.md). Dopo il pairing iniziale,
-il tasto sync sul controller riconnette da solo via BlueZ —
-questo script rileva la riconnessione in automatico (polling
-pygame.joystick ogni 2s quando il joystick non è presente) e
-riprende a inviare comandi senza bisogno di riavviare nulla.
+(vedi PAIRING_xbox_bluetooth.md).
 
-Lanciato da HIM.py dentro "avvia_generale()", gira per tutta la
-durata della sessione: se il controller si disconnette e si
-riconnette più volte, lo script si auto-recupera ogni volta.
-
-DIPENDENZE: pip install pygame paho-mqtt
 """
 
 import socket
@@ -24,6 +15,9 @@ import struct
 import time
 import sys
 import json
+import os
+import subprocess
+import signal
 
 try:
     import pygame
@@ -48,6 +42,8 @@ TOPIC_VIDEO_FINISHED = "pi/video/finished"   # pubblicato da mqttMedia.py a fine
 TOPIC_MODALITA_CMD   = "robot/modalita/cmd"  # {"cmd":"switch","modalita":"generale"}
 TOPIC_DRONE_CMD      = "drone/cmd/rpyt"      # {"roll","pitch","yaw","thrust"} — testDroneMQTTsecure.py
 TOPIC_DRONE_STOP     = "drone/cmd/stop"
+TOPIC_FACE_PREVIEW   = "robot/face/mode_preview"  # anteprima faccina (Y=nome, X/disco="end")
+
 
 DEADZONE      = 0.15
 VEL_MIN       = 50
@@ -81,11 +77,12 @@ DRONE_MIN_THRUST  = 0
 DRONE_MAX_ANGLE   = 30.0   # gradi, deflessione roll/pitch/yaw a stick tutto premuto
 
 # ── Modalità cicliche (stesso ordine/nomi di HIM.py) ────────────────
-MODALITA_ORDINE = ["generale", "jarvis", "drone", "esplorazione", "linea"]
+MODALITA_ORDINE = ["generale", "jarvis", "drone", "esplorazione", "linea","doom"]
 
-# Sequenza multimediale per modalità: lista di ("video"|"audio", nomefile).
-# Il video ha già il suo audio incluso in sé. "generale" concatena un
-# audio DOPO che il video è terminato (gestito via pi/video/finished).
+DOOM_WAD = os.path.expanduser("~/LBSof/doom/DOOM.WAD")
+
+
+# Sequenza multimediale per modalità
 MEDIA_PER_MODALITA = {
     "generale":     [("video", "youMayAlsoGiveUp.mp4"),
                       ("audio", "invincible-edit-epic.mp3")],
@@ -93,6 +90,7 @@ MEDIA_PER_MODALITA = {
     "drone":        [("audio", "StartDrone.mp3")],
     "esplorazione": [("audio", "dora-the-explorer.mp3")],
     "linea":        [("video", "IWANTLAGMABILLS.mp4")],
+    "doom":         [("audio", "doom-eternal.mp3")],
 }
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -224,6 +222,56 @@ def invia_drone_stop():
     mqtt_client.publish(TOPIC_DRONE_STOP, "1")
 
 
+TOPIC_FACCIA_CMD = "robot/faccia/cmd"   # "pausa" | "riprendi" — gestito da HIM.py
+
+doom_process = None
+
+def avvia_doom():
+    global doom_process
+    if doom_process is not None:
+        return
+    if MQTT_OK:
+        mqtt_client.publish(TOPIC_FACCIA_CMD, "pausa")
+        print("\n[XBOX-PI] Faccia in pausa (richiesta a HIM.py)")
+    time.sleep(1.5)   # dà tempo a X di chiudersi e liberare il vt1/DRM
+    env = os.environ.copy()
+    env["SDL_VIDEODRIVER"] = "kmsdrm"   # Doom gira diretto su console, non serve X
+    doom_process = subprocess.Popen(
+        ["chocolate-doom", "-iwad", DOOM_WAD, "-fullscreen"],
+        env=env, preexec_fn=os.setsid
+    )
+    print("\n[XBOX-PI] 🔫 DOOM avviato — premi MENU per uscire")
+
+def ferma_doom():
+    global doom_process
+    if doom_process is not None:
+        try:
+            os.killpg(os.getpgid(doom_process.pid), signal.SIGTERM)
+        except Exception:
+            pass
+        doom_process = None
+        print("\n[XBOX-PI] DOOM terminato")
+    if MQTT_OK:
+        mqtt_client.publish(TOPIC_FACCIA_CMD, "riprendi")
+        print("[XBOX-PI] Faccia ripresa (richiesta a HIM.py)")
+
+
+def face_preview(nome_modalita: str):
+    """Dice alla faccina quale modalità si sta scorrendo con Y
+    (overlay in sequences/mode_preview.py sul lato RoboEyes)."""
+    if not MQTT_OK:
+        return
+    mqtt_client.publish(TOPIC_FACE_PREVIEW, nome_modalita)
+
+
+def face_preview_end():
+    """Toglie l'overlay di anteprima dalla faccina (conferma con X,
+    o sicurezza alla disconnessione del controller)."""
+    if not MQTT_OK:
+        return
+    mqtt_client.publish(TOPIC_FACE_PREVIEW, "end")
+
+
 def _apply_deadzone(v: float) -> float:
     if abs(v) < DEADZONE:
         return 0.0
@@ -238,7 +286,7 @@ def _trigger_value(raw: float) -> float:
 # ── LOOP PRINCIPALE — hotplug automatico ───────────────────────────
 
 def main():
-    global modalita_attiva
+    global modalita_attiva, doom_process
 
     pygame.init()
     pygame.joystick.init()
@@ -275,7 +323,17 @@ def main():
         dt = now - last_tick
         last_tick = now
 
-        # ── Nessun joystick: prova a rilevarne uno ──────────────────
+        # se rimane accesso doom spegnilo e rimetti faccina
+        if doom_process is not None and doom_process.poll() is not None:
+            print("\n[XBOX-PI] DOOM chiuso dall'interno — ripristino faccina")
+            doom_process = None
+            if MQTT_OK:
+                mqtt_client.publish(TOPIC_FACCIA_CMD, "riprendi")
+            modalita_attiva = "generale"
+            modalita_idx = MODALITA_ORDINE.index("generale")
+            conferma_switch("generale")
+
+        # prova rilevare joystick
         if joystick is None:
             pygame.joystick.quit()
             pygame.joystick.init()
@@ -293,6 +351,7 @@ def main():
             if event.type == pygame.JOYDEVICEREMOVED:
                 print("\n[XBOX-PI] Controller disconnesso — in attesa di riconnessione...")
                 invia_stop()
+                face_preview_end()   # sicurezza: non lasciare l'overlay appeso
                 joystick = None
                 prev_cmd = ""
                 break
@@ -322,22 +381,34 @@ def main():
                     nome = MODALITA_ORDINE[modalita_idx]
                     print(f"\n[XBOX-PI] Anteprima modalità: '{nome}'  (X per confermare)")
                     play_sequence(nome)
+                    face_preview(nome)
 
                 elif event.button == BTN_X:
                     nome = MODALITA_ORDINE[modalita_idx]
                     modalita_precedente = modalita_attiva
                     modalita_attiva = nome
-                    conferma_switch(nome)
+                    face_preview_end()
 
-                    if nome != "generale":
+                    if nome == "doom":
                         invia_stop()
-                    contesto = "auto"
+                        if modalita_precedente == "drone":
+                            invia_drone_stop()
+                        avvia_doom()
+                    else:
+                        conferma_switch(nome)
 
-                    if modalita_precedente == "drone" and nome != "drone":
-                        invia_drone_stop()   # sicurezza: se uscivi dal drone in volo
-                    if nome == "drone":
-                        drone_armato = False   # richiede sempre un nuovo "arma" (B) entrando
-                        drone_thrust = 0
+                        if nome != "generale":
+                            invia_stop()
+                        contesto = "auto"
+
+                        if modalita_precedente == "drone" and nome != "drone":
+                            invia_drone_stop()
+                        if nome == "drone":
+                            drone_armato = False
+                            drone_thrust = 0
+
+                        if modalita_precedente == "doom":
+                            ferma_doom()
 
                 elif event.button == BTN_VIEW:
                     nome = MODALITA_ORDINE[modalita_idx]
@@ -345,9 +416,15 @@ def main():
                     play_sequence(nome)
 
                 elif event.button == BTN_MENU:
-                    if modalita_attiva == "generale":
+                    if modalita_attiva == "doom":
+                        ferma_doom()
+                        modalita_attiva = "generale"
+                        modalita_idx = MODALITA_ORDINE.index("generale")
+                        conferma_switch("generale")
+                        print("\n[XBOX-PI] Uscito da DOOM → modalità GENERALE")
+                    elif modalita_attiva == "generale":
                         contesto = "braccio" if contesto == "auto" else "auto"
-                        invia_stop()   # ferma il carrello quando si passa al braccio (o viceversa)
+                        invia_stop()
                         print(f"\n[XBOX-PI] Contesto → {contesto.upper()}")
 
             elif event.type == pygame.JOYHATMOTION:
@@ -364,13 +441,14 @@ def main():
         if joystick is None:
             continue
 
-        # ── Lettura assi ─────────────────────────────────────────────
+        # ── Lettura assi
         try:
             num_axes = joystick.get_numaxes()
             def axis(i): return joystick.get_axis(i) if i < num_axes else 0.0
         except Exception:
             print("\n[XBOX-PI] Errore lettura controller — considerato disconnesso.")
             invia_stop()
+            face_preview_end()
             joystick = None
             prev_cmd = ""
             continue
@@ -388,7 +466,7 @@ def main():
         lt_was_pressed, rt_was_pressed = lt_pressed, rt_pressed
 
         # ═══════════════════════════════════════════════════════════
-        # CONTESTO: modalità "generale" → Auto oppure Braccio
+        # CONTESTO: modalità "generale" → Auto oppure Braccio tramite tasto menù
         # ═══════════════════════════════════════════════════════════
         if modalita_attiva == "generale" and contesto == "auto":
             if lt_edge:
@@ -468,6 +546,8 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         invia_stop()
+        ferma_doom()
+        face_preview_end()
         if MQTT_OK and mqtt_client:
             mqtt_client.loop_stop()
             mqtt_client.disconnect()
