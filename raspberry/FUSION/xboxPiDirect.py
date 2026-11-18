@@ -250,6 +250,7 @@ def ferma_doom():
         except Exception:
             pass
         doom_process = None
+        time.sleep(1.0)                                     # ← per dare tempo al DRM/vt1 liberarsi prima di far ripartire X
         print("\n[XBOX-PI] DOOM terminato")
     if MQTT_OK:
         mqtt_client.publish(TOPIC_FACCIA_CMD, "riprendi")
@@ -327,6 +328,7 @@ def main():
         if doom_process is not None and doom_process.poll() is not None:
             print("\n[XBOX-PI] DOOM chiuso dall'interno — ripristino faccina")
             doom_process = None
+            time.sleep(1.0)             # sempre per dare tempo di liberarsi
             if MQTT_OK:
                 mqtt_client.publish(TOPIC_FACCIA_CMD, "riprendi")
             modalita_attiva = "generale"

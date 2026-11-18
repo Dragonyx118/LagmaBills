@@ -18,8 +18,8 @@ AUDIO_BASE     = "/home/ladrodirame/data/sounds"
 VIDEO_BASE     = "/home/ladrodirame/data/videos"
 STEREO_MAC     = "DD:23:A5:42:C3:92"
 
-# ── FACCINA (RoboEyes su startx, finestra tmux "faccia") ──────────
-FACE_TMUX_TARGET = "lagmabills:faccia"
+
+TOPIC_FACCIA_CMD    = "robot/faccia/cmd"
 
 TOPIC_AUDIO_PLAY    = "pi/audio/play"
 TOPIC_AUDIO_STOP    = "pi/audio/stop"
@@ -29,49 +29,39 @@ TOPIC_AUDIO_LIST    = "pi/audio/list"
 TOPIC_VIDEO_PLAY    = "pi/video/play"
 TOPIC_VIDEO_STOP    = "pi/video/stop"
 TOPIC_VIDEO_LIST    = "pi/video/list"
-
 VIDEO_EXTENSIONS = (".mp4", ".mkv", ".avi", ".mov", ".webm")
 AUDIO_EXTENSIONS = (".mp3", ".wav", ".ogg", ".flac")
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp")
 
 # ── STATO GLOBALE ────────────────────────────────────────────────
 current_proc = None
+mqtt_client_ref = None 
 face_paused  = False
 state_lock   = threading.Lock()
 
 # ── FACCINA — pausa/ripresa (per liberare il DRM master a mpv) ────
 
 def pause_face():
-    """Ferma la faccina (startx tiene il DRM lock, mpv --vo=drm altrimenti non parte)."""
+    """Chiede a HIM.py di mettere in pausa la faccina (libera il DRM per mpv)."""
     global face_paused
     with state_lock:
         if face_paused:
             return
         face_paused = True
-    subprocess.run(
-        ["tmux", "send-keys", "-t", FACE_TMUX_TARGET, "C-c"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
-    time.sleep(0.5)
-    subprocess.run(["pkill", "-9", "-f", "startx"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.run(["pkill", "-9", "Xorg"],         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print("[FACCIA] Fermata per liberare il DRM")
+    if mqtt_client_ref:
+        mqtt_client_ref.publish(TOPIC_FACCIA_CMD, "pausa")
+    print("[FACCIA] Pausa richiesta a HIM.py")
 
 def resume_face():
-    """Rilancia la finestra tmux 'faccia' con lo stesso comando di partenza."""
+    """Chiede a HIM.py di far ripartire la faccina."""
     global face_paused
     with state_lock:
         if not face_paused:
             return
         face_paused = False
-    result = subprocess.run(
-        ["tmux", "respawn-window", "-k", "-t", FACE_TMUX_TARGET],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
-    if result.returncode != 0:
-        print(f"[FACCIA] ERRORE respawn: {result.stderr.strip()}")
-    else:
-        print("[FACCIA] Ripristinata")
+    if mqtt_client_ref:
+        mqtt_client_ref.publish(TOPIC_FACCIA_CMD, "riprendi")
+    print("[FACCIA] Ripresa richiesta a HIM.py")
 
 # ── BLUETOOTH ────────────────────────────────────────────────────
 
@@ -93,6 +83,40 @@ def get_bluetooth_sink() -> str | None:
     except Exception:
         pass
     return None
+
+def get_bluetooth_sink() -> str | None:
+    try:
+        out = subprocess.check_output(
+            ["pactl", "list", "short", "sinks"], text=True
+        )
+        for line in out.splitlines():
+            mac_under = STEREO_MAC.replace(":", "_")
+            if mac_under.lower() in line.lower():
+                return line.split()[1]
+    except Exception:
+        pass
+    return None
+
+# ── WATCHDOG BLUETOOTH — riconnette lo speaker appena torna disponibile ──
+
+def _is_bt_connected() -> bool:
+    try:
+        out = subprocess.check_output(
+            ["bluetoothctl", "info", STEREO_MAC], text=True
+        )
+        return "Connected: yes" in out
+    except Exception:
+        return False
+
+def bluetooth_watchdog(poll_s: int = 10):
+    """Gira per sempre in background: se lo speaker non è connesso,
+    prova a connetterlo. Copre il caso in cui lo accendi a sessione
+    già avviata (connect_bluetooth() nei play_* parte solo quando
+    arriva un comando, non appena lo speaker torna disponibile)."""
+    while True:
+        if not _is_bt_connected():
+            connect_bluetooth()
+        time.sleep(poll_s)
 
 # ── SCAN FILE ────────────────────────────────────────────────────
 
@@ -296,9 +320,14 @@ def on_message(client, userdata, msg):
 # ── MAIN ─────────────────────────────────────────────────────────
 
 def main():
+    global mqtt_client_ref
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="audio_video_player")
+    mqtt_client_ref = client
     client.on_connect = on_connect
     client.on_message = on_message
+
+    threading.Thread(target=bluetooth_watchdog, daemon=True).start()
+
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     client.loop_forever()
 
