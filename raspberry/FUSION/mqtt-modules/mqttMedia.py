@@ -4,6 +4,7 @@ mqttAudio.py — LagmaBills
 Gestisce riproduzione audio, video e immagini via MQTT.
 """
 
+import socket
 import os
 import json
 import subprocess
@@ -18,7 +19,6 @@ AUDIO_BASE     = "/home/ladrodirame/data/sounds"
 VIDEO_BASE     = "/home/ladrodirame/data/videos"
 STEREO_MAC     = "DD:23:A5:42:C3:92"
 
-
 TOPIC_FACCIA_CMD    = "robot/faccia/cmd"
 
 TOPIC_AUDIO_PLAY    = "pi/audio/play"
@@ -29,20 +29,33 @@ TOPIC_AUDIO_LIST    = "pi/audio/list"
 TOPIC_VIDEO_PLAY    = "pi/video/play"
 TOPIC_VIDEO_STOP    = "pi/video/stop"
 TOPIC_VIDEO_LIST    = "pi/video/list"
+
 VIDEO_EXTENSIONS = (".mp4", ".mkv", ".avi", ".mov", ".webm")
 AUDIO_EXTENSIONS = (".mp3", ".wav", ".ogg", ".flac")
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp")
 
 # ── STATO GLOBALE ────────────────────────────────────────────────
 current_proc = None
-mqtt_client_ref = None 
-face_paused  = False
-state_lock   = threading.Lock()
+mqtt_client_ref = None
+face_paused = False
+state_lock = threading.Lock()
 
-# ── FACCINA — pausa/ripresa (per liberare il DRM master a mpv) ────
+
+def _media_env() -> dict:
+    """Ambiente con DISPLAY=:0, XAUTHORITY e XDG_RUNTIME_DIR per X11 e PipeWire."""
+    env = os.environ.copy()
+    env["DISPLAY"] = ":0"
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    xauth = os.path.expanduser("~/.Xauthority")
+    if os.path.exists(xauth) and "XAUTHORITY" not in env:
+        env["XAUTHORITY"] = xauth
+    return env
+
+
+# ── FACCINA — pausa/ripresa ──────────────────────────────────────
 
 def pause_face():
-    """Chiede a HIM.py di mettere in pausa la faccina (libera il DRM per mpv)."""
+    """Chiede a HIM.py di mettere in pausa la faccina durante la riproduzione video."""
     global face_paused
     with state_lock:
         if face_paused:
@@ -51,6 +64,7 @@ def pause_face():
     if mqtt_client_ref:
         mqtt_client_ref.publish(TOPIC_FACCIA_CMD, "pausa")
     print("[FACCIA] Pausa richiesta a HIM.py")
+
 
 def resume_face():
     """Chiede a HIM.py di far ripartire la faccina."""
@@ -63,6 +77,7 @@ def resume_face():
         mqtt_client_ref.publish(TOPIC_FACCIA_CMD, "riprendi")
     print("[FACCIA] Ripresa richiesta a HIM.py")
 
+
 # ── BLUETOOTH ────────────────────────────────────────────────────
 
 def connect_bluetooth():
@@ -71,31 +86,20 @@ def connect_bluetooth():
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
 
-def get_bluetooth_sink() -> str | None:
-    try:
-        out = subprocess.check_output(
-            ["pactl", "list", "short", "sinks"], text=True
-        )
-        for line in out.splitlines():
-            mac_under = STEREO_MAC.replace(":", "_")
-            if mac_under.lower() in line.lower():
-                return line.split()[1]
-    except Exception:
-        pass
-    return None
 
 def get_bluetooth_sink() -> str | None:
     try:
         out = subprocess.check_output(
             ["pactl", "list", "short", "sinks"], text=True
         )
+        mac_under = STEREO_MAC.replace(":", "_")
         for line in out.splitlines():
-            mac_under = STEREO_MAC.replace(":", "_")
             if mac_under.lower() in line.lower():
                 return line.split()[1]
     except Exception:
         pass
     return None
+
 
 # ── WATCHDOG BLUETOOTH — riconnette lo speaker appena torna disponibile ──
 
@@ -108,15 +112,15 @@ def _is_bt_connected() -> bool:
     except Exception:
         return False
 
+
 def bluetooth_watchdog(poll_s: int = 10):
     """Gira per sempre in background: se lo speaker non è connesso,
-    prova a connetterlo. Copre il caso in cui lo accendi a sessione
-    già avviata (connect_bluetooth() nei play_* parte solo quando
-    arriva un comando, non appena lo speaker torna disponibile)."""
+    prova a connetterlo."""
     while True:
         if not _is_bt_connected():
             connect_bluetooth()
         time.sleep(poll_s)
+
 
 # ── SCAN FILE ────────────────────────────────────────────────────
 
@@ -132,6 +136,7 @@ def scan_audio_files() -> dict:
             result[key] = [f"{subfolder}/{f}" for f in files]
     return result
 
+
 def scan_video_files() -> dict:
     result = {"videos": []}
     if os.path.isdir(VIDEO_BASE):
@@ -142,6 +147,7 @@ def scan_video_files() -> dict:
         result["videos"] = files
     return result
 
+
 # ── PUBLISH LISTE ────────────────────────────────────────────────
 
 def publish_audio_list(client):
@@ -150,10 +156,12 @@ def publish_audio_list(client):
     total = len(files["music"]) + len(files["sfx"])
     print(f"[LIST] Audio: {total} file pubblicati")
 
+
 def publish_video_list(client):
     files = scan_video_files()
     client.publish(TOPIC_VIDEO_LIST, json.dumps(files), qos=0, retain=True)
     print(f"[LIST] Video/Immagini: {len(files['videos'])} file pubblicati")
+
 
 # ── PLAYBACK ─────────────────────────────────────────────────────
 
@@ -178,6 +186,7 @@ def stop_playback(resume_face_after: bool = False):
     if resume_face_after:
         resume_face()
 
+
 def _watch_and_resume_face(proc: subprocess.Popen):
     """Thread che aspetta la fine naturale del processo video e riattiva la faccina."""
     proc.wait()
@@ -188,6 +197,7 @@ def _watch_and_resume_face(proc: subprocess.Popen):
         current_proc = None
         resume_face()
 
+
 def play_audio(filepath: str):
     global current_proc
     stop_playback()
@@ -195,9 +205,11 @@ def play_audio(filepath: str):
     connect_bluetooth()
     current_proc = subprocess.Popen(
         ["mpg123", "--", filepath],
+        env=_media_env(),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     print(f"[AUDIO] {filepath}")
+
 
 def play_video(filepath: str):
     global current_proc
@@ -210,8 +222,8 @@ def play_video(filepath: str):
 
     cmd = [
         "mpv",
-        "--vo=drm",
-        "--drm-connector=HDMI-A-1",
+        "--vo=gpu,x11",
+        "--fs",
         f"--audio-device={audio_device}",
         "--no-terminal",
         "--really-quiet",
@@ -221,10 +233,12 @@ def play_video(filepath: str):
 
     current_proc = subprocess.Popen(
         cmd,
+        env=_media_env(),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     threading.Thread(target=_watch_and_resume_face, args=(current_proc,), daemon=True).start()
-    print(f"[VIDEO] {filepath} → video:HDMI audio:{audio_device}")
+    print(f"[VIDEO] {filepath} → video:X11(:0) audio:{audio_device}")
+
 
 def play_image(filepath: str, duration: int = 10):
     global current_proc
@@ -232,8 +246,8 @@ def play_image(filepath: str, duration: int = 10):
     pause_face()
     cmd = [
         "mpv",
-        "--vo=drm",
-        "--drm-connector=HDMI-A-1",
+        "--vo=gpu,x11",
+        "--fs",
         "--no-terminal",
         "--really-quiet",
         f"--image-display-duration={duration}",
@@ -242,10 +256,12 @@ def play_image(filepath: str, duration: int = 10):
     ]
     current_proc = subprocess.Popen(
         cmd,
+        env=_media_env(),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     threading.Thread(target=_watch_and_resume_face, args=(current_proc,), daemon=True).start()
-    print(f"[IMAGE] {filepath} → HDMI per {duration}s")
+    print(f"[IMAGE] {filepath} → X11(:0) per {duration}s")
+
 
 # ── MQTT CALLBACKS ───────────────────────────────────────────────
 
@@ -265,9 +281,10 @@ def on_connect(client, userdata, flags, rc, properties=None):
     else:
         print(f"[MQTT] Errore connessione rc={rc}")
 
+
 def on_message(client, userdata, msg):
     payload = msg.payload.decode("utf-8", errors="replace").strip()
-    topic   = msg.topic
+    topic = msg.topic
     print(f"[MQTT RX] {topic} = '{payload}'")
 
     if topic == TOPIC_AUDIO_STOP:
@@ -282,6 +299,7 @@ def on_message(client, userdata, msg):
             vol = max(0, min(100, int(payload)))
             subprocess.run(
                 ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", str(vol / 100.0)],
+                env=_media_env(),
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
             print(f"[VOL] {vol}%")
@@ -317,11 +335,15 @@ def on_message(client, userdata, msg):
         else:
             print(f"[VIDEO/IMAGE] File non trovato: '{payload}' → provato: '{filepath}'")
 
+
 # ── MAIN ─────────────────────────────────────────────────────────
 
 def main():
     global mqtt_client_ref
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="audio_video_player")
+    client = mqtt.Client(
+        mqtt.CallbackAPIVersion.VERSION2,
+        client_id=f"audio_video_player_{socket.gethostname()}_{os.getpid()}"
+    )
     mqtt_client_ref = client
     client.on_connect = on_connect
     client.on_message = on_message
@@ -330,6 +352,7 @@ def main():
 
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     client.loop_forever()
+
 
 if __name__ == "__main__":
     main()

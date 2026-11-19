@@ -24,10 +24,8 @@ Modalità non interattive (per activationListener.py):
 import subprocess
 import sys
 import os
-import signal
 import shutil
 import json
-import threading
 
 try:
     import paho.mqtt.client as mqtt
@@ -36,7 +34,7 @@ except ImportError:
     MQTT_OK = False
     print("[WARN] paho-mqtt non trovato — switch modalità da controller disabilitato.")
 
-MQTT_BROKER = "localhost"
+MQTT_BROKER = "100.100.61.49"
 MQTT_PORT   = 1883
 TOPIC_MODALITA_CMD = "robot/modalita/cmd"   # {"cmd":"switch","modalita":"generale"}
 TOPIC_FACCIA_CMD    = "robot/faccia/cmd"    # "pausa" | "riprendi" — da mqttMedia.py
@@ -138,7 +136,7 @@ def avvia_faccia():
         return
     subprocess.run(["tmux", "new-window", "-t", SESSION, "-n", "faccia"])
     subprocess.run(["tmux", "send-keys", "-t", f"{SESSION}:faccia",
-                     "startx /usr/bin/python3 /home/ladrodirame/AIsburra/TUFF/main.py -- :0 vt1",
+                     "startx /usr/bin/python3 /home/ladrodirame/FUSION/bepo-animation/main.py -- :0 vt1",
                      "Enter"])
     print("  ✔ Faccia (RoboEyes) avviata su :0 vt1")
 
@@ -167,10 +165,6 @@ def avvia_controller():
 
 
 def avvia_media():
-    """
-    Avvia mqttMedia.py (player audio/video/immagini) in una finestra
-    PERSISTENTE, indipendente dalla modalità selezionata.
-    """
     if not _sessione_esiste():
         return
     esistenti = _tmux("list-windows", "-t", SESSION, "-F", "#{window_name}").split("\n")
@@ -179,7 +173,7 @@ def avvia_media():
         return
     subprocess.run(["tmux", "new-window", "-t", SESSION, "-n", "media"])
     subprocess.run(["tmux", "send-keys", "-t", f"{SESSION}:media",
-                     "python3 ~/FUSION/mqttMedia.py", "Enter"])
+                     "DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/1000 python3 ~/FUSION/mqttMedia.py", "Enter"])
     print("  ✔ Media (audio/video) pronto")
 
 
@@ -203,18 +197,15 @@ def avvia_pistats():
 # ── AVVIO/ARRESTO AUTOMATICO (per activationListener.py) ──────────
 
 def avvia_tutto_automatico():
-    """
-    Sequenza di avvio automatica, richiamata da activationListener.py
-    quando riceve il comando UDP "START" dall'app. Non interattiva:
-    avvia tutto il necessario e ritorna (il processo può terminare,
-    i moduli restano vivi in tmux).
-    """
+    """Sequenza di avvio servizi perenni attivi sempre."""
     print("\n[AUTO-START] Avvio automatico LagmaBills...")
     _assicura_sessione()
     avvia_faccia()
+    avvia_media()
     avvia_pistats()
     avvia_controller()
-    avvia_mqtt_listener()
+    subprocess.run(["tmux", "send-keys", "-t", f"{SESSION}:menu",
+                     "python3 ~/FUSION/HIM.py", "Enter"])
     print("[AUTO-START] Completato — sessione tmux attiva in background.")
 
 
@@ -334,7 +325,10 @@ def _on_mqtt_message(client, userdata, msg):
 def avvia_mqtt_listener():
     if not MQTT_OK:
         return
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="him_switch_listener")
+    client = mqtt.Client(
+        mqtt.CallbackAPIVersion.VERSION2,
+        client_id=f"him_switch_listener_{os.getpid()}"
+    )
     client.on_connect = _on_mqtt_connect
     client.on_message = _on_mqtt_message
     try:
@@ -391,6 +385,7 @@ def main():
     print("\nBenvenuto nel Raspberry Launcher (tmux edition)!")
     _assicura_sessione()
     avvia_faccia()
+    avvia_media()
     avvia_pistats()
     avvia_mqtt_listener()
 
