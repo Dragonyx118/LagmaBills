@@ -727,20 +727,25 @@ def main():
         # CONTESTO: modalità "drone"
         # ═══════════════════════════════════════════════════════════
         elif modalita_attiva == "drone":
-            if lt_edge:
-                drone_thrust = max(DRONE_MIN_THRUST, drone_thrust - DRONE_STEP_THRUST)
-                print(f"\n[XBOX-PI] Thrust ↓ = {drone_thrust}")
-            if rt_edge:
-                drone_thrust = min(DRONE_MAX_THRUST, drone_thrust + DRONE_STEP_THRUST)
-                print(f"\n[XBOX-PI] Thrust ↑ = {drone_thrust}")
+            if rt_pressed:
+                drone_thrust = min(DRONE_MAX_THRUST,
+                                    drone_thrust + int(DRONE_THRUST_RATE_S * dt))
+            if lt_pressed:
+                drone_thrust = max(DRONE_MIN_THRUST,
+                                    drone_thrust - int(DRONE_THRUST_RATE_S * dt))
+            if rt_pressed or lt_pressed:
+                print(f"\r[XBOX-PI] Thrust = {drone_thrust:6d}/{DRONE_MAX_THRUST}   ",
+                      end="", flush=True)
 
             if drone_armato:
                 dx_v = _apply_deadzone(axis(AXIS_DX_V))
                 yaw   = sx_h * DRONE_MAX_ANGLE
                 roll  = dx_h * DRONE_MAX_ANGLE
                 pitch = -dx_v * DRONE_MAX_ANGLE
-
                 invia_drone_rpyt(roll, pitch, yaw, drone_thrust)
+            else:
+                drone_thrust = 0
+                invia_drone_rpyt(0.0, 0.0, 0.0, 0)
 
         time.sleep(1.0 / CONTROLLER_HZ)
 

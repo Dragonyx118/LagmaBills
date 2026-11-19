@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 """
 HIM.py — LagmaBills Launcher (versione tmux)
-
-Ogni modulo gira nel proprio pannello tmux, con output isolato,
-scrollabile e sempre leggibile — niente più stampe che si accavallano
-sullo stesso terminale.
-
-Sessione tmux: "lagmabills"
-  Ogni modalità crea una FINESTRA tmux dedicata (es. "generale"),
-  con un PANNELLO per ogni processo lanciato in quella modalità.
-
-Comandi utili una volta dentro tmux:
-  Ctrl+B poi frecce      → passa da un pannello all'altro
-  Ctrl+B poi w           → lista finestre (modalità attive)
-  Ctrl+B poi d           → "detach" (esci senza killare i processi)
-  tmux attach -t lagmabills   → rientra nella sessione da fuori
-
-Modalità non interattive (per activationListener.py):
-  python3 HIM.py --auto-start   → avvia faccia+media+pistats+controller e esce
-  python3 HIM.py --stop         → termina tutta la sessione tmux e esce
 """
 
 import subprocess
@@ -26,6 +8,7 @@ import sys
 import os
 import shutil
 import json
+import time
 
 try:
     import paho.mqtt.client as mqtt
@@ -38,11 +21,19 @@ MQTT_BROKER = "100.100.61.49"
 MQTT_PORT   = 1883
 TOPIC_MODALITA_CMD = "robot/modalita/cmd"   # {"cmd":"switch","modalita":"generale"}
 TOPIC_FACCIA_CMD    = "robot/faccia/cmd"    # "pausa" | "riprendi" — da mqttMedia.py
+TOPIC_AUDIO_PLAY    = "pi/audio/play"       # stesso topic usato da xboxPiDirect.py
+
+# Config Wi-Fi Drone & Beep
+DRONE_SSID        = "ESP-DRONE_90E5B199B123"
+DRONE_PASS        = "12345678"
+WIFI_IFACE        = "wlan0"
+WIFI_SCAN_RETRY_S = 3.0
+DRONE_BEEP_AUDIO  = "beep_on.mp3"              # file .mp3 riprodotto al collegamento alla rete del drone
 
 SESSION = "lagmabills"
 
-# Traccia i pannelli attivi per poterli terminare puliti
-pannelli_attivi = []   # lista di (finestra, pannello_id)
+pannelli_attivi = []
+_mqtt_client = None
 
 
 def _tmux(*args):
@@ -120,14 +111,69 @@ def termina_finestra(nome: str):
         print(f"  ✔ Finestra '{nome}' terminata")
 
 
+def riproduci_beep_mqtt():
+    """Riproduce l'audio .mp3 di conferma connessione drone via MQTT."""
+    if not MQTT_OK or _mqtt_client is None:
+        print(f"[DRONE-WIFI] MQTT non disponibile — impossibile riprodurre '{DRONE_BEEP_AUDIO}'")
+        return
+    try:
+        _mqtt_client.publish(TOPIC_AUDIO_PLAY, DRONE_BEEP_AUDIO)
+        print(f"[DRONE-WIFI] 🔊 Riprodotto '{DRONE_BEEP_AUDIO}' su {TOPIC_AUDIO_PLAY}")
+    except Exception as e:
+        print(f"[DRONE-WIFI] Errore invio beep MQTT: {e}")
+
+
+def _scan_rete_drone(ssid: str, iface: str) -> bool:
+    """Esegue uno scan Wi-Fi su iface e ritorna True se ssid è visibile."""
+    subprocess.run(["sudo", "ip", "link", "set", iface, "up"],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["sudo", "nmcli", "dev", "wifi", "rescan", "ifname", iface],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    res = subprocess.run(
+        ["sudo", "nmcli", "-t", "-f", "SSID", "dev", "wifi", "list", "ifname", iface],
+        capture_output=True, text=True
+    )
+    if res.returncode != 0:
+        return False
+    ssids = {line.strip() for line in res.stdout.splitlines() if line.strip()}
+    return ssid in ssids
+
+
+def attesa_e_connessione_drone_wifi():
+    """
+    Scansiona le reti Wi-Fi in loop finché non trova DRONE_SSID,
+    si collega all'interfaccia WIFI_IFACE e riproduce il beep .mp3.
+    """
+    print(f"\n[DRONE-WIFI] Scansione reti in corso per '{DRONE_SSID}' su {WIFI_IFACE}...")
+    subprocess.run(["sudo", "nmcli", "device", "disconnect", WIFI_IFACE],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    while True:
+        trovata = _scan_rete_drone(DRONE_SSID, WIFI_IFACE)
+        if not trovata:
+            print(f"[DRONE-WIFI] Rete '{DRONE_SSID}' non trovata. Nuovo scan tra {WIFI_SCAN_RETRY_S:.0f}s...")
+            time.sleep(WIFI_SCAN_RETRY_S)
+            continue
+
+        print(f"[DRONE-WIFI] Rete '{DRONE_SSID}' rilevata! Connessione in corso...")
+        conn = subprocess.run(
+            ["sudo", "nmcli", "device", "wifi", "connect", DRONE_SSID,
+             "password", DRONE_PASS, "ifname", WIFI_IFACE],
+            capture_output=True, text=True
+        )
+        if conn.returncode == 0:
+            print(f"[DRONE-WIFI] ✔ Connesso a '{DRONE_SSID}'")
+            time.sleep(1.5)
+            riproduci_beep_mqtt()
+            return
+
+        err = (conn.stderr or conn.stdout or "").strip()
+        print(f"[DRONE-WIFI] Connessione fallita ({err}). Riprovo tra {WIFI_SCAN_RETRY_S:.0f}s...")
+        time.sleep(WIFI_SCAN_RETRY_S)
+
+
 def avvia_faccia():
-    """
-    Avvia l'animazione della faccia (RoboEyes) su X server dedicato
-    (:0 vt1, schermo HDMI fisico). Gira in una finestra tmux PROPRIA,
-    separata dalle modalità — deve restare attiva SEMPRE, qualunque
-    modalità sia selezionata. termina_finestra()/switch_modalita()
-    non la toccano mai perché non è nel dizionario MODALITA.
-    """
     if not _sessione_esiste():
         return
     esistenti = _tmux("list-windows", "-t", SESSION, "-F", "#{window_name}").split("\n")
@@ -142,11 +188,6 @@ def avvia_faccia():
 
 
 def avvia_controller():
-    """
-    Avvia testI2C.py (bridge I2C) + xboxPiDirect.py (controller Bluetooth
-    diretto) in una finestra tmux PERSISTENTE, indipendente dalla
-    modalità selezionata.
-    """
     if not _sessione_esiste():
         return
     esistenti = _tmux("list-windows", "-t", SESSION, "-F", "#{window_name}").split("\n")
@@ -178,10 +219,6 @@ def avvia_media():
 
 
 def avvia_pistats():
-    """
-    Avvia piStatsMqtt.py (publish periodico CPU/RAM/temp su MQTT) in una
-    finestra tmux PERSISTENTE, indipendente dalla modalità selezionata.
-    """
     if not _sessione_esiste():
         return
     esistenti = _tmux("list-windows", "-t", SESSION, "-F", "#{window_name}").split("\n")
@@ -194,10 +231,7 @@ def avvia_pistats():
     print("  ✔ Pi stats (CPU/RAM/temp) pronto")
 
 
-# ── AVVIO/ARRESTO AUTOMATICO (per activationListener.py) ──────────
-
 def avvia_tutto_automatico():
-    """Sequenza di avvio servizi perenni attivi sempre."""
     print("\n[AUTO-START] Avvio automatico LagmaBills...")
     _assicura_sessione()
     avvia_faccia()
@@ -210,11 +244,6 @@ def avvia_tutto_automatico():
 
 
 def ferma_tutto():
-    """
-    Arresto completo, richiamato da activationListener.py quando
-    riceve il comando UDP "STOP" dall'app. Chiude l'intera sessione
-    tmux (tutti i moduli, incluse faccia/media/pistats/controller).
-    """
     print("\n[AUTO-STOP] Arresto completo LagmaBills...")
     if _sessione_esiste():
         subprocess.run(["tmux", "kill-session", "-t", SESSION])
@@ -244,9 +273,12 @@ def avvia_jarvis():
 
 
 def avvia_drone():
-    print("\n[DRONE] Avvio modulo...")
+    print("\n[DRONE] Preparazione controller e scansione rete Wi-Fi drone...")
+    avvia_controller()
+    attesa_e_connessione_drone_wifi()
     fin = _crea_finestra("drone")
     avvia_in_pannello(fin, "python3 ~/FUSION/droneMqttNew.py", "drone-bridge", primo=True)
+    print(f"  → Vai alla finestra con: tmux select-window -t {SESSION}:drone")
 
 
 def avvia_esplorazione():
@@ -291,8 +323,6 @@ def switch_modalita(nome: str):
     print(f"[SWITCH] Modalità attiva ora: {nome}")
 
 
-# ── MQTT — ricezione comando switch dal controller (Y+X) ──────────
-
 def _on_mqtt_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         client.subscribe(TOPIC_MODALITA_CMD)
@@ -323,6 +353,7 @@ def _on_mqtt_message(client, userdata, msg):
 
 
 def avvia_mqtt_listener():
+    global _mqtt_client
     if not MQTT_OK:
         return
     client = mqtt.Client(
@@ -334,6 +365,7 @@ def avvia_mqtt_listener():
     try:
         client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
         client.loop_start()
+        _mqtt_client = client
     except Exception as e:
         print(f"[MQTT] Impossibile connettersi: {e}")
 
