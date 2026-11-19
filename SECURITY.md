@@ -1,63 +1,66 @@
-# Security Policy — LagmaBills
+# SECURITY.md — LagmaBills
 
-## Ambito del progetto
-LagmaBills è un robot di salvataggio/sorveglianza domestica open source, distribuito
-sotto **Hippocratic License 3.0**. Questa policy descrive come segnalare
-vulnerabilità e quali limiti etici/di sicurezza si applicano all'uso del software
-e del firmware in questo repository.
+## Project Scope
+LagmaBills is an open-source home rescue/surveillance robot, distributed under
+the **Hippocratic License 3.0**. This policy describes how to report
+vulnerabilities and what ethical/security limits apply to the use of the
+software and firmware in this repository.
 
-## Versioni supportate
-| Componente              | Supportato |
-|--------------------------|:----------:|
-| Firmware ESP32 (motori)  | ✅ ultima release su `main` |
-| Firmware ESP32 (sensori) | ✅ ultima release su `main` |
-| Software Raspberry Pi    | ✅ ultima release su `main` |
-| App MAUI / sito web       | ✅ ultima release su `main` |
-| Versioni precedenti       | ❌ non patchate |
+## Supported Versions
+| Component                | Supported |
+|---------------------------|:---------:|
+| ESP32 firmware (motors)   | ✅ latest release on `main` |
+| ESP32 firmware (sensors)  | ✅ latest release on `main` |
+| Raspberry Pi software     | ✅ latest release on `main` |
+| MAUI app / website         | ✅ latest release on `main` |
+| Older versions              | ❌ not patched |
 
-## Segnalazione di una vulnerabilità
-Se trovi una vulnerabilità (es. credenziali MQTT/WiFi in chiaro, accesso non
-autenticato ai bridge I2C/MQTT, exploit sul web viewer, falla nel bridge del drone):
+## Reporting a Vulnerability
+If you find a vulnerability (e.g. plaintext MQTT/WiFi credentials, unauthenticated
+access to I2C/MQTT bridges, an exploit in the web viewer, a flaw in the drone
+bridge):
 
-1. **Non aprire una issue pubblica.**
-2. Scrivi direttamente a: `[inserire email/contatto del team]`.
-3. Includi: componente coinvolto, passi per riprodurre, impatto potenziale.
-4. Riceverai un riscontro entro 7 giorni; la correzione viene prioritizzata in
-   base alla gravità (accesso remoto non autorizzato ai motori/braccio > fughe di
-   dati locali > bug minori).
+1. **Do not open a public issue.**
+2. Write directly to: `[insert team/maintainer contact]`.
+3. Include: affected component, steps to reproduce, potential impact.
+4. You will receive a response within 7 days; fixes are prioritized by
+   severity (unauthorized remote access to motors/arm > local data leaks >
+   minor bugs).
 
-## Limiti d'uso previsti dalla licenza
-Questo progetto è concesso in licenza **esclusivamente** per usi compatibili con
-la Hippocratic License 3.0 (clausola 3.1). In particolare, chiunque forka,
-distribuisce o integra questo codice **non può**:
+## Usage Limits Imposed by the License
+This project is licensed **exclusively** for uses compatible with the
+Hippocratic License 3.0 (clause 3.1). In particular, anyone who forks,
+distributes, or integrates this code **may not**:
 
-- impiegarlo per attività militari (3.1.13);
-- fornirlo a forze dell'ordine o enti che stipulano contratti con esse (3.1.14);
-- usarlo per sorveglianza di massa da parte di enti governativi o multinazionali (3.1.12);
-- utilizzarlo per violare privacy, proprietà o diritti fondamentali delle persone
-  monitorate dalla telecamera/microfoni del robot (3.1.5, 3.1.8, 3.1.9);
-- impiegarlo per discriminare, danneggiare l'ambiente o violare i diritti dei
-  lavoratori lungo la filiera (3.1.5, 3.1.11, 3.1.15, 3.1.16).
+- use it for military activities (3.1.13);
+- supply it to law enforcement agencies or entities that enter into contracts
+  with them (3.1.14);
+- use it for mass surveillance by government agencies or multinational
+  corporations (3.1.12);
+- use it to violate the privacy, property, or fundamental rights of people
+  monitored by the robot's camera/microphones (3.1.5, 3.1.8, 3.1.9);
+- use it to discriminate, harm the environment, or violate workers' rights
+  along the supply chain (3.1.5, 3.1.11, 3.1.15, 3.1.16).
 
-Il mancato rispetto di questi punti comporta la decadenza automatica della
-licenza (sez. 7.1 e 7.3) e la possibilità per le parti lese di agire legalmente
-(sez. 4).
+Failure to comply with these points results in automatic termination of the
+license (sec. 7.1 and 7.3) and the possibility for harmed parties to take
+legal action (sec. 4).
 
-## Buone pratiche di sicurezza per chi usa/clona il repo
-- **Credenziali WiFi/MQTT**: non committare mai SSID/password reali (vedi i
-  default hardcoded nel firmware ESP32 — vanno sostituiti tramite NVS prima del
-  deploy, non lasciati nel codice).
-- **MQTT broker**: esporre il broker solo su rete locale/VPN (es. Tailscale),
-  mai direttamente su internet senza autenticazione/TLS.
-- **Streaming camera (MJPEG)**: il server Flask di sviluppo (`codiceRaspCam.txt`)
-  non va esposto pubblicamente — valutare autenticazione o tunnel VPN, dato che
-  il feed video tocca direttamente la privacy delle persone riprese (vedi
-  vincolo 3.1.8 sopra).
-- **Bridge drone (`testDroneMQTTsecure.py`)**: il watchdog di atterraggio
-  automatico va sempre mantenuto attivo; non disabilitarlo in produzione.
-- **I2C/seriale**: i comandi motori via seriale/I2C non sono autenticati — va
-  limitato l'accesso fisico/di rete al bus.
+## Security Best Practices for Repo Users/Forkers
+- **WiFi/MQTT credentials**: never commit real SSIDs/passwords (see the
+  hardcoded defaults in the ESP32 firmware — these must be replaced via NVS
+  before deployment, not left in the code).
+- **MQTT broker**: expose the broker only on the local network/VPN (e.g.
+  Tailscale), never directly on the internet without authentication/TLS.
+- **Camera streaming (MJPEG)**: the development Flask server
+  (`codiceRaspCam.txt`) must not be exposed publicly — consider authentication
+  or a VPN tunnel, since the video feed directly touches the privacy of people
+  being filmed (see constraint 3.1.8 above).
+- **Drone bridge (`testDroneMQTTsecure.py`)**: the automatic landing watchdog
+  must always stay active; do not disable it in production.
+- **I2C/serial**: motor commands over serial/I2C are not authenticated —
+  physical/network access to the bus must be restricted.
 
-## Divulgazione responsabile
-Le vulnerabilità saranno rese pubbliche (changelog/release notes) solo dopo il
-rilascio di una patch, salvo diverso accordo con chi segnala.
+## Responsible Disclosure
+Vulnerabilities will be made public (changelog/release notes) only after a
+patch has been released, unless otherwise agreed with the reporter.
