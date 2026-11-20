@@ -9,16 +9,17 @@
  • Inoltra i 26 byte raw all'ESP32 MOTORI (0x08) con opcode 0xE0
  • Riceve comandi MQTT movimento e li manda all'ESP32 MOTORI via I2C
  • Permette di modificare le soglie sicurezza motori via MQTT -> I2C 0xE1
- • NUOVO: listener UDP porta 5566 per comandi motori/servo a bassa
-   latenza (usato da xboxPiDirect.py e da eventuali client remoti),
+ • Listener UDP porta 5566 per comandi motori/servo a bassa latenza
+   (usato da xboxPiDirect.py, exploration.py e da eventuali client remoti),
    bypassando MQTT per il solo controllo diretto joystick/braccio.
 
- DIPENDENZE:
-   sudo apt install python3-smbus2 python3-paho-mqtt mosquitto
-   sudo raspi-config  ->  Interface Options -> I2C -> Enable
+ MODIFICHE rispetto alla versione precedente:
+   - POLL_SENS_HZ  10 -> 20 Hz  (50ms invece di 100ms tra una lettura
+     sensori e l'altra: riduce la latenza della catena di sicurezza)
+   - PERIOD_MOT     0.5 -> 0.1s (stato motori/encoder pubblicato ogni
+     100ms invece di 500ms: necessario perché exploration.py possa
+     calcolare la velocità reale del robot con un ritardo accettabile)
 
- AVVIO:
-   python3 testI2C.py
 
 ================================================================
  UDP PORTA 5566 - comandi motori/servo a bassa latenza (bypass MQTT):
@@ -63,8 +64,9 @@ TOPIC_MOT_CMD   = "robot/motori/cmd"
 TOPIC_MOT_STATO = "robot/motori/stato"
 TOPIC_MOT_SOGLIE= "robot/motori/soglie"
 
-POLL_SENS_HZ = 10
-PERIOD_SENS  = 1.0 / POLL_SENS_HZ
+# ── MODIFICATO: polling più frequente per ridurre latenza sicurezza ──
+POLL_SENS_HZ = 20                  # era 10
+PERIOD_SENS  = 1.0 / POLL_SENS_HZ  # 50 ms
 PERIOD_DIAG  = 0.5
 
 UDP_CMD_PORT   = 5566
@@ -531,7 +533,7 @@ def main():
     else:
         log.info("ESP32 motori OK")
 
-    # Avvia listener UDP (motori + servo) -- QUESTO era il pezzo mancante
+    # Avvia listener UDP (motori + servo)
     udp_thread = threading.Thread(target=udp_listener, args=(bus,), daemon=True)
     udp_thread.start()
 
@@ -557,9 +559,15 @@ def main():
     t_sens      = time.monotonic()
     t_diag      = time.monotonic()
     t_mot_stato = time.monotonic()
-    PERIOD_MOT  = 0.5
+    # ── MODIFICATO: era 0.5s, ora allineato a POLL_SENS_HZ (50ms) ──
+    PERIOD_MOT  = 0.1
 
     log.info("Bridge avviato - Ctrl+C per uscire")
+    log.info(f"Polling sensori: {POLL_SENS_HZ}Hz ({PERIOD_SENS*1000:.0f}ms)  "
+              f"| Stato motori: {1.0/PERIOD_MOT:.0f}Hz ({PERIOD_MOT*1000:.0f}ms)")
+
+    buf = None
+    data = None
 
     while _running:
         now = time.monotonic()
@@ -569,7 +577,7 @@ def main():
 
             buf = i2c_read(bus, ESP32_SENS_ADDR, SENS_BUF_SIZE)
             if buf is None:
-                time.sleep(0.1)
+                time.sleep(0.05)
                 continue
 
             data = parse_buf(buf)
@@ -603,7 +611,7 @@ def main():
 
             if (now - t_diag) >= PERIOD_DIAG:
                 t_diag = now
-                if buf:
+                if buf is not None and data is not None:
                     print_diagnostica(data, buf, mot)
 
         time.sleep(0.005)

@@ -345,4 +345,6 @@ class DrawingMixin:
             still_running=self._run_sequence(ct)
             if not still_running:
                 self.sequence=None
+        
+        self._draw_mode_preview(ct)
 

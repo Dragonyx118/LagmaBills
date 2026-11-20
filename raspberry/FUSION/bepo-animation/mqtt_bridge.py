@@ -1,8 +1,8 @@
 """
 mqtt_bridge.py — FUSION / RoboEyes
 Collega la faccina al broker MQTT: ascolta robot/face (mood o
-animazione per nome) e robot/cmd (JSON con face_emotion dall'AI).
-Identico al comportamento originale, solo isolato dal resto.
+animazione per nome), robot/cmd (JSON con face_emotion dall'AI) e
+robot/face/mode_preview (overlay anteprima modalità da xboxPiDirect.py).
 """
 
 import os
@@ -31,6 +31,16 @@ def start_mqtt_face(robo):
         except Exception:
             return
 
+        payload_lower = payload.lower()
+
+        # Anteprima modalità (Y/X sul controller, xboxPiDirect.py)
+        if msg.topic == "robot/face/mode_preview":
+            if payload_lower == "end":
+                robo.end_mode_preview()
+            else:
+                robo.start_mode_preview(payload_lower)
+            return
+
         # JSON dall'AI (robot/cmd)
         try:
             data = json.loads(payload)
@@ -43,7 +53,6 @@ def start_mqtt_face(robo):
             pass
 
         # Comando testuale diretto (robot/face) — mood O animazione
-        payload_lower = payload.lower()
         if payload_lower in MQTT_MOOD_MAP:
             robo.next_mood = MQTT_MOOD_MAP[payload_lower]
         elif payload_lower in ANIM_MAP:
@@ -53,8 +62,12 @@ def start_mqtt_face(robo):
     client.on_message = on_message
     try:
         client.connect(os.getenv("MQTT_HOST", "localhost"), int(os.getenv("MQTT_PORT", "1883")), keepalive=60)
-        client.subscribe([("robot/face", 0), ("robot/cmd", 0)])
+        client.subscribe([
+            ("robot/face", 0),
+            ("robot/cmd", 0),
+            ("robot/face/mode_preview", 0),
+        ])
         client.loop_start()
-        print("[mqtt] In ascolto su robot/face")
+        print("[mqtt] In ascolto su robot/face, robot/cmd, robot/face/mode_preview")
     except Exception as e:
         print(f"[mqtt] Non disponibile: {e}")

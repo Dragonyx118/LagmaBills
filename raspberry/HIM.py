@@ -283,12 +283,14 @@ def avvia_drone():
 
 def avvia_esplorazione():
     print("\n[ESPLORAZIONE AUTONOMA] Avvio modulo...")
+    avvia_controller()          # AGGIUNTO
     fin = _crea_finestra("esplorazione")
     avvia_in_pannello(fin, "python3 ~/FUSION/esplorazione.py", "esplorazione", primo=True)
 
 
 def avvia_insegui_linea():
     print("\n[INSEGUI LINEA] Avvio modulo...")
+    avvia_controller()          # AGGIUNTO
     fin = _crea_finestra("linea")
     avvia_in_pannello(fin, "python3 ~/FUSION/mqttLinea.py", "insegui-linea", primo=True)
 
